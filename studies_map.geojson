@@ -1,0 +1,320 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -4.01,
+          5.36
+        ]
+      },
+      "properties": {
+        "name": "Abidjan",
+        "number_of_studies": 20,
+        "color": "#0000FF"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          28.03,
+          -26.2
+        ]
+      },
+      "properties": {
+        "name": "Johannesburg",
+        "number_of_studies": 38,
+        "color": "#FF0000"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -20,
+          0
+        ]
+      },
+      "properties": {
+        "name": "Multi-country",
+        "number_of_studies": 40,
+        "color": "#800080"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -4,
+          17
+        ]
+      },
+      "properties": {
+        "name": "Mali",
+        "number_of_studies": 2,
+        "color": "#FFA500"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          39,
+          9
+        ]
+      },
+      "properties": {
+        "name": "Ethiopia",
+        "number_of_studies": 19,
+        "color": "#008000"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          8,
+          10
+        ]
+      },
+      "properties": {
+        "name": "Nigeria",
+        "number_of_studies": 9,
+        "color": "#FFFF00"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          38,
+          1
+        ]
+      },
+      "properties": {
+        "name": "Kenya",
+        "number_of_studies": 17,
+        "color": "#00FFFF"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          32,
+          1.5
+        ]
+      },
+      "properties": {
+        "name": "Uganda",
+        "number_of_studies": 17,
+        "color": "#FF00FF"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -1.02,
+          7.9
+        ]
+      },
+      "properties": {
+        "name": "Ghana",
+        "number_of_studies": 10,
+        "color": "#00FF00"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          34.8,
+          -6.36
+        ]
+      },
+      "properties": {
+        "name": "Tanzania",
+        "number_of_studies": 21,
+        "color": "#FFC0CB"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          34,
+          -13.3
+        ]
+      },
+      "properties": {
+        "name": "Malawi",
+        "number_of_studies": 18,
+        "color": "#FF7F50"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.5,
+          -18.66
+        ]
+      },
+      "properties": {
+        "name": "Mozambique",
+        "number_of_studies": 4,
+        "color": "#FA8072"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          30,
+          -15
+        ]
+      },
+      "properties": {
+        "name": "Zambia",
+        "number_of_studies": 4,
+        "color": "#808000"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          30,
+          -19
+        ]
+      },
+      "properties": {
+        "name": "Zimbabwe",
+        "number_of_studies": 6,
+        "color": "#CD853F"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          30,
+          -2
+        ]
+      },
+      "properties": {
+        "name": "Rwanda",
+        "number_of_studies": 8,
+        "color": "#000080"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          24,
+          -22
+        ]
+      },
+      "properties": {
+        "name": "Botswana",
+        "number_of_studies": 2,
+        "color": "#008080"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          21,
+          -4
+        ]
+      },
+      "properties": {
+        "name": "Dem. Rep. Congo",
+        "number_of_studies": 3,
+        "color": "#EE82EE"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -11.5,
+          8.5
+        ]
+      },
+      "properties": {
+        "name": "Sierra Leone",
+        "number_of_studies": 1,
+        "color": "#4B0082"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          24,
+          -30
+        ]
+      },
+      "properties": {
+        "name": "South Africa",
+        "number_of_studies": 31,
+        "color": "#DC143C"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          28.2,
+          -29.6
+        ]
+      },
+      "properties": {
+        "name": "Lesotho",
+        "number_of_studies": 2,
+        "color": "#FFD700"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -14.5,
+          14.5
+        ]
+      },
+      "properties": {
+        "name": "Senegal",
+        "number_of_studies": 3,
+        "color": "#C0C0C0"
+      }
+    }
+  ]
+}
