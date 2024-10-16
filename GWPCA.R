@@ -82,8 +82,8 @@ print(summary_stats_long)
 corr_matrix <- cor(merged_data_no_geom[vars], use = "complete.obs")
 
 corrplot(corr_matrix, method = "color", type = "upper", order = "hclust",
-         tl.cex = 0.6, tl.col = "black", tl.srt = 45,
-         addCoef.col = "black", number.cex = 0.5,
+         tl.cex = 0.4, tl.col = "black", tl.srt = 45,
+         addCoef.col = "black", number.cex = 0.3,
          title = "Correlation Matrix of Variables")
 
 
@@ -225,6 +225,123 @@ plot_loadings <- ggplot(loadings_df, aes(x = reorder(Variable, PC1_Loading), y =
   theme_minimal() +
   labs(title = "Loadings for PC1", x = "Variables", y = "PC1 Loading")
 print(plot_loadings)
+
+plot_hvi <- ggplot(gwpca_sf) +
+  geom_sf(aes(fill = HVI)) +
+  scale_fill_distiller(palette = "Reds", direction = 1) +
+  theme_minimal() +
+  labs(title = "Heat Vulnerability Index", fill = "HVI")
+print(plot_hvi)
+
+plot_top_10_hvi <- ggplot(top_10_vulnerable_wards) +
+  geom_sf(aes(fill = HVI)) +
+  scale_fill_distiller(palette = "Reds", direction = 1) +
+  theme_minimal() +
+  labs(title = "Top 10 Most Vulnerable Wards in Johannesburg", fill = "HVI")
+print(plot_top_10_hvi)
+
+
+plot_hvi_overlay <- ggplot() +
+  geom_sf(data = gwpca_sf, aes(fill = HVI), alpha = 0.6) +
+  geom_sf(data = top_10_vulnerable_wards, fill = NA, color = "black", size = 0.7) +
+  scale_fill_distiller(palette = "Reds", direction = 1) +
+  theme_minimal() +
+  labs(title = "Heat Vulnerability Index with Highlighted High-Risk Wards", fill = "HVI")
+print(plot_hvi_overlay)
+
+library(spdep)
+
+# Convert gwpca_sf to Spatial object if necessary
+gwpca_sp <- as_Spatial(gwpca_sf)
+
+# Create spatial weights matrix
+neighbors <- poly2nb(gwpca_sp)
+weights <- nb2listw(neighbors, style = "W")
+
+# Calculate Global Moran's I for HVI
+global_moran <- moran.test(gwpca_sp$HVI, listw = weights)
+
+print("Global Moran's I for HVI:")
+print(global_moran)
+
+# Install factoextra package if not already installed
+install.packages("factoextra")
+
+# Load the package
+library(factoextra)
+
+# Assuming pca_result is already computed
+# pca_result <- prcomp(merged_data_no_geom[vars], scale. = TRUE)
+
+# Plot variable loadings
+fviz_pca_var(pca_result,
+             col.var = "contrib", # Color by contributions to the PCs
+             gradient.cols = c("blue", "yellow", "red"),
+             repel = TRUE) +
+  labs(title = "PCA Variable Loadings")
+
+# Check the class of gwpca_sp
+class(gwpca_sp)
+
+# If it's a Spatial*DataFrame, access data using @data
+str(gwpca_sp@data$HVI)
+
+# Alternatively, if gwpca_sp$HVI is not a vector, extract it properly
+HVI_vector <- gwpca_sp@data$HVI
+
+HVI_vector <- as.numeric(HVI_vector)
+
+# Calculate Local Moran's I
+local_moran <- localmoran(HVI_vector, listw = weights)
+
+# Add results back to the spatial dataframe
+gwpca_sp@data$LocalI <- local_moran[, "Ii"]
+gwpca_sp@data$LocalI_pvalue <- local_moran[, "Pr(z > 0)"]
+
+
+library(spgwr)
+
+# Define dependent and independent variables
+dependent_var <- "HVI"
+independent_vars <- c(
+  "UTFVI", "NDBI__mean", "LST", "NDVI", "No.medical.insurance",
+  "Using.public.healthcare.facilities", "Poor.health.status",
+  "hypertensi", "X60_plus_pr"
+)
+
+# Ensure variables are numeric and scaled
+for (var in independent_vars) {
+  gwpca_sf[[var]] <- as.numeric(gwpca_sf[[var]])
+  gwpca_sf[[var]] <- scale(gwpca_sf[[var]])
+}
+
+# Remove missing values
+gwpca_sf_complete <- gwpca_sf %>% drop_na(all_of(c(dependent_var, independent_vars)))
+
+# List of independent variables
+independent_vars <- c(
+  "UTFVI", "NDBI__mean", "LST", "NDVI", "No.medical.insurance",
+  "Using.public.healthcare.facilities", "Poor.health.status",
+  "hypertensi", "X60_plus_pr"
+)
+
+# Check if these variables exist in gwpca_sf
+missing_vars <- independent_vars[!independent_vars %in% names(gwpca_sf)]
+if (length(missing_vars) > 0) {
+  print("The following variables are missing from gwpca_sf:")
+  print(missing_vars)
+}
+
+
+
+
+
+
+
+
+
+
+
 
 
 
