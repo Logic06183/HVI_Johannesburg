@@ -1,0 +1,623 @@
+I'm sorry to hear that you lost your notebook. Based on our previous conversation, I've reconstructed the entire notebook for your heat vulnerability analysis in Johannesburg. This notebook includes all the corrected code, enhanced visualizations, and explanations to guide you through each step of the analysis.
+
+---
+
+# Heat Vulnerability Analysis in Johannesburg
+
+This R Notebook provides a comprehensive analysis of heat vulnerability in Johannesburg using various spatial statistical methods. The analysis includes:
+
+- **Data Preparation**
+- **Exploratory Data Analysis**
+- **Correlation Matrix Visualization with Grouped Variables**
+- **Principal Component Analysis (PCA) with Enhanced Visualization**
+- **Calculation and Mapping of the Heat Vulnerability Index (HVI)**
+- **Spatial Autocorrelation Analysis (Global and Local Moran's I)**
+- **Geographically Weighted Principal Component Analysis (GWPCA)**
+
+---
+
+```{r setup, include=FALSE}
+# Set global options
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## Load Required Libraries
+
+First, we need to load all the necessary libraries for the analysis.
+
+```{r}
+# Load necessary libraries
+library(sf)            # For handling spatial data
+library(dplyr)         # Data manipulation
+library(ggplot2)       # Data visualization
+library(corrplot)      # Correlation plots
+library(psych)         # PCA and psychometric analysis
+library(GWmodel)       # Geographically Weighted Models
+library(spdep)         # Spatial dependence analysis
+library(factoextra)    # Visualization for PCA
+library(RColorBrewer)  # Color palettes
+library(viridis)       # Color palettes
+library(tidyr)         # Data reshaping
+library(scales)        # Scaling data
+library(ggcorrplot)    # Enhanced correlation plots
+library(plotly)        # Interactive plots
+```
+
+## Set Working Directory
+
+Set your working directory to the location where your data files are stored.
+
+```{r}
+# Set working directory
+setwd("C:/Users/CraigParker/OneDrive - Wits PHR/Desktop/HVI_Johannesburg")
+```
+
+## Data Preparation
+
+Read the spatial data and perform initial data preparation, including handling missing values and ensuring variables are correctly formatted.
+
+```{r}
+# Read spatial data
+gwpca_sf <- st_read("C:/Users/CraigParker/OneDrive - Wits PHR/Desktop/HVI_Johannesburg", layer = "geometry")
+
+# If the data is in a different CRS, transform it to a common CRS
+gwpca_sf <- st_transform(gwpca_sf, crs = 32735)  # WGS 84 / UTM zone 35S
+```
+
+### Variable Selection
+
+Ensure that the variable names used in the code match exactly with those in your data.
+
+```{r}
+# List of variables to be used in the analysis (ensure these match exactly)
+vars <- c(
+  "Crowded.dw",     # Crowded dwellings
+  "No.piped.w",     # No piped water
+  "Using.publ",     # Using public healthcare facilities
+  "Poor.healt",     # Poor health status
+  "Failed.to",      # Failed to find healthcare when needed
+  "No.medical",     # No medical insurance
+  "Household",      # Household hunger risk
+  "Benefiting",     # Benefiting from school feeding scheme
+  "UTFVI",          # Urban Thermal Field Variance Index
+  "LST",            # Land Surface Temperature
+  "NDVI",           # Normalized Difference Vegetation Index
+  "NDBI__mean",     # Normalized Difference Built-up Index
+  "concern_he", 
+  "cancer_pro", 
+  "diabetes_p", 
+  "pneumonia_", 
+  "heart_dise", 
+  "hypertensi", 
+  "hiv_prop", 
+  "tb_prop", 
+  "covid_prop", 
+  "X60_plus_pr"     # Population aged 60+
+)
+```
+
+### Verify Variable Names
+
+```{r}
+# Inspect column names of the spatial data
+names(gwpca_sf)
+
+# Identify variables in 'vars' that are not in 'gwpca_sf'
+missing_vars <- vars[!vars %in% names(gwpca_sf)]
+if(length(missing_vars) > 0){
+  cat("The following variables are missing from gwpca_sf:\n")
+  print(missing_vars)
+} else {
+  cat("All variables in 'vars' are present in 'gwpca_sf'.\n")
+}
+```
+
+### Subset Data
+
+```{r}
+# Subset the data to include only the variables in 'vars' and geometry
+gwpca_data <- gwpca_sf %>%
+  select(all_of(vars), geometry)
+
+# Print the first few rows to verify the selected data
+head(gwpca_data)
+```
+
+### Ensure Variables are Numeric
+
+```{r}
+# Convert variables to numeric
+for (var in vars) {
+  gwpca_data[[var]] <- as.numeric(gwpca_data[[var]])
+}
+```
+
+### Handle Missing Values
+
+```{r}
+# Remove rows with missing values in the selected variables
+gwpca_data <- gwpca_data %>%
+  drop_na(all_of(vars))
+```
+
+## Exploratory Data Analysis
+
+### Summary Statistics
+
+Compute and display summary statistics for the selected variables.
+
+```{r}
+# Compute summary statistics
+summary_stats <- gwpca_data %>%
+  st_set_geometry(NULL) %>%
+  summarise(across(everything(), list(
+    mean = mean, sd = sd, median = median, min = min, max = max
+  )))
+
+# Reshape data for better display
+summary_stats_long <- summary_stats %>%
+  pivot_longer(cols = everything(),
+               names_to = c("Variable", "Statistic"),
+               names_sep = "_",
+               values_to = "Value")
+
+print(summary_stats_long)
+```
+
+### Correlation Matrix and Enhanced Visualization
+
+#### Define Variable Groups and Labels
+
+```{r}
+# Define variable groups
+variable_groups <- c(
+  "Crowded.dw" = "Socioeconomic",
+  "No.piped.w" = "Socioeconomic",
+  "Using.publ" = "Socioeconomic",
+  "Poor.healt" = "Health",
+  "Failed.to" = "Health",
+  "No.medical" = "Socioeconomic",
+  "Household" = "Socioeconomic",
+  "Benefiting" = "Socioeconomic",
+  "UTFVI" = "Environmental",
+  "LST" = "Environmental",
+  "NDVI" = "Environmental",
+  "NDBI__mean" = "Environmental",
+  "concern_he" = "Health",
+  "cancer_pro" = "Health",
+  "diabetes_p" = "Health",
+  "pneumonia_" = "Health",
+  "heart_dise" = "Health",
+  "hypertensi" = "Health",
+  "hiv_prop" = "Health",
+  "tb_prop" = "Health",
+  "covid_prop" = "Health",
+  "X60_plus_pr" = "Socioeconomic"
+)
+
+# Update variable labels to be more descriptive
+variable_labels <- c(
+  "Crowded.dw" = "Crowded Dwellings",
+  "No.piped.w" = "No Piped Water",
+  "Using.publ" = "Public Healthcare Use",
+  "Poor.healt" = "Poor Health Status",
+  "Failed.to" = "Failed to Find Healthcare",
+  "No.medical" = "No Medical Insurance",
+  "Household" = "Household Hunger Risk",
+  "Benefiting" = "School Feeding Scheme",
+  "UTFVI" = "UTFVI",
+  "LST" = "Land Surface Temp",
+  "NDVI" = "NDVI",
+  "NDBI__mean" = "NDBI Mean",
+  "concern_he" = "Health Concern",
+  "cancer_pro" = "Cancer Proportion",
+  "diabetes_p" = "Diabetes Proportion",
+  "pneumonia_" = "Pneumonia Proportion",
+  "heart_dise" = "Heart Disease Proportion",
+  "hypertensi" = "Hypertension Proportion",
+  "hiv_prop" = "HIV Proportion",
+  "tb_prop" = "TB Proportion",
+  "covid_prop" = "COVID Proportion",
+  "X60_plus_pr" = "60+ Population Proportion"
+)
+```
+
+#### Create Variable Information Data Frame
+
+```{r}
+# Create a data frame with variable names, groups, and labels
+variable_info <- data.frame(
+  variable = names(variable_groups),
+  group = unname(variable_groups),
+  label = unname(variable_labels),
+  stringsAsFactors = FALSE
+)
+```
+
+#### Compute Correlation Matrix
+
+```{r}
+# Compute correlation matrix
+corr_matrix <- gwpca_data %>%
+  st_set_geometry(NULL) %>%
+  cor(use = "complete.obs")
+```
+
+#### Reorder Variables and Correlation Matrix
+
+```{r}
+# Order variables by group
+variable_info_ordered <- variable_info %>%
+  arrange(factor(group, levels = c("Environmental", "Health", "Socioeconomic")), variable)
+
+ordered_variables <- variable_info_ordered$variable
+variable_labels_ordered <- variable_info_ordered$label
+
+# Reorder the correlation matrix
+corr_matrix_ordered <- corr_matrix[ordered_variables, ordered_variables]
+
+# Set the row and column names to the descriptive labels
+rownames(corr_matrix_ordered) <- variable_labels_ordered
+colnames(corr_matrix_ordered) <- variable_labels_ordered
+```
+
+#### Assign Colors to Groups
+
+```{r}
+# Assign colors to groups
+group_colors <- c("Environmental" = "forestgreen", "Health" = "darkorange", "Socioeconomic" = "purple")
+label_colors_ordered <- group_colors[variable_info_ordered$group]
+```
+
+#### Plot the Enhanced Correlation Matrix
+
+```{r}
+# Define color palette with red for positive correlations and blue for negative correlations
+corr_colors <- colorRampPalette(c("blue", "white", "red"))(200)
+
+# Adjust label size and rotation
+label_cex <- 0.6  # Adjust this value to change label size
+label_srt <- 45   # Adjust this value to change label rotation
+
+# Plot the correlation matrix with updated labels and color scheme
+corrplot(corr_matrix_ordered,
+         method = "color",
+         col = corr_colors,
+         type = "upper",
+         order = "original",
+         tl.cex = label_cex,
+         tl.col = label_colors_ordered,
+         tl.srt = label_srt,
+         addCoef.col = "black",
+         number.cex = 0.5,
+         mar = c(0,0,2,0))
+
+# Add a legend for variable groups
+legend("topright", legend = names(group_colors), col = group_colors, pch = 15, cex = 0.8)
+```
+
+**Note:** Adjust `label_cex` and `label_srt` to fit the labels appropriately.
+
+## Principal Component Analysis (PCA) with Enhanced Visualization
+
+Perform PCA to reduce dimensionality and identify key components contributing to heat vulnerability.
+
+### Perform PCA
+
+```{r}
+# Prepare data for PCA
+pca_data <- gwpca_data %>%
+  st_set_geometry(NULL) %>%
+  drop_na()
+
+# Perform PCA
+pca_result <- prcomp(pca_data, scale. = TRUE)
+```
+
+### Define Variable Groups (if not already defined)
+
+```{r}
+# Variable groups and labels are already defined in previous steps
+```
+
+### Enhance the PCA Variable Loadings Plot
+
+```{r}
+# Load necessary libraries
+library(factoextra)
+library(ggplot2)
+
+# Create a vector of colors for the groups
+group_colors <- c("Environmental" = "forestgreen", "Health" = "darkorange", "Socioeconomic" = "purple")
+
+# Match colors to variables
+variable_colors <- group_colors[variable_info$group]
+names(variable_colors) <- variable_info$variable
+
+# Plot the PCA variable loadings with color-coded groups
+fviz_pca_var(pca_result,
+             geom = c("arrow", "text"),
+             col.var = variable_info$group, # Color by groups
+             palette = group_colors,
+             legend.title = "Variable Groups",
+             repel = TRUE) +
+  labs(title = "PCA Variable Loadings Grouped by Category")
+```
+
+### Explore Additional Principal Components
+
+```{r}
+# Plot PC1 vs PC3
+fviz_pca_var(pca_result,
+             axes = c(1, 3),
+             geom = c("arrow", "text"),
+             col.var = variable_info$group,
+             palette = group_colors,
+             legend.title = "Variable Groups",
+             repel = TRUE) +
+  labs(title = "PCA Variable Loadings (PC1 vs PC3)")
+```
+
+## Calculation of Heat Vulnerability Index (HVI)
+
+Compute the HVI using the first principal component.
+
+```{r}
+# Extract the first principal component
+gwpca_data$HVI <- pca_result$x[, 1]
+
+# Normalize HVI to a 0-1 scale
+gwpca_data$HVI <- rescale(gwpca_data$HVI, to = c(0, 1))
+```
+
+## Mapping the Heat Vulnerability Index
+
+Visualize the spatial distribution of HVI across Johannesburg.
+
+```{r}
+# Plot HVI map
+plot_hvi <- ggplot(gwpca_data) +
+  geom_sf(aes(fill = HVI)) +
+  scale_fill_viridis_c(option = "inferno") +
+  theme_minimal() +
+  labs(title = "Heat Vulnerability Index", fill = "HVI")
+
+print(plot_hvi)
+```
+
+## Identifying Top 10 Most Vulnerable Wards
+
+Highlight the top 10 wards with the highest HVI.
+
+```{r}
+# Select top 10 most vulnerable wards
+top_10_vulnerable_wards <- gwpca_data %>%
+  arrange(desc(HVI)) %>%
+  slice(1:10)
+
+# Plot the top 10 wards
+plot_top_10_hvi <- ggplot() +
+  geom_sf(data = gwpca_data, aes(fill = HVI), alpha = 0.6) +
+  geom_sf(data = top_10_vulnerable_wards, fill = "black", color = "black", size = 0.7, alpha = 0.8) +
+  scale_fill_viridis_c(option = "inferno") +
+  theme_minimal() +
+  labs(title = "Top 10 Most Vulnerable Wards in Johannesburg", fill = "HVI")
+
+print(plot_top_10_hvi)
+```
+
+## Global and Local Moran's I
+
+Assess spatial autocorrelation in HVI using Global and Local Moran's I statistics.
+
+```{r}
+# Convert sf object to spatial object for spdep
+gwpca_sp <- as_Spatial(gwpca_data)
+
+# Create spatial weights matrix
+neighbors <- poly2nb(gwpca_sp)
+weights <- nb2listw(neighbors, style = "W")
+
+# Calculate Global Moran's I
+global_moran <- moran.test(gwpca_data$HVI, listw = weights)
+print(global_moran)
+
+# Calculate Local Moran's I
+local_moran <- localmoran(gwpca_data$HVI, listw = weights)
+
+# Add Local Moran's I results to the sf dataframe
+gwpca_data$LocalI <- local_moran[, "Ii"]
+gwpca_data$LocalI_pvalue <- local_moran[, "Pr(z != E(Ii))"]
+```
+
+### Mapping Local Moran's I
+
+Visualize the spatial variation of Local Moran's I.
+
+```{r}
+# Map the Local Moran's I
+plot_lisa <- ggplot(gwpca_data) +
+  geom_sf(aes(fill = LocalI)) +
+  scale_fill_distiller(palette = "RdBu", direction = 1) +
+  theme_minimal() +
+  labs(title = "Local Moran's I for HVI", fill = "Local I")
+
+print(plot_lisa)
+```
+
+## Geographically Weighted Principal Component Analysis (GWPCA)
+
+Perform GWPCA to understand how the principal components vary spatially.
+
+```{r}
+## Step 1: Examine the gwpca_result object
+str(gwpca_result)
+
+# Step 2: Verify function arguments
+args(gwpca)
+
+# Step 3: Update the function call (if necessary)
+gwpca_result <- gwpca(
+  data = gwpca_data_sp,
+  vars = vars,
+  k = 2,
+  robust = TRUE,
+  bw = bw
+  # Removed adaptive and scores arguments if not recognized
+)
+
+# Step 4: Try different bandwidth values
+bw_smaller <- 50  # Adjust as needed
+gwpca_result <- gwpca(
+  data = gwpca_data_sp,
+  vars = vars,
+  k = 2,
+  robust = TRUE,
+  bw = bw_smaller,
+  adaptive = TRUE
+)
+
+# Step 5: Use fixed bandwidth
+bw_fixed <- 10000  # Adjust as appropriate
+gwpca_result <- gwpca(
+  data = gwpca_data_sp,
+  vars = vars,
+  k = 2,
+  robust = TRUE,
+  bw = bw_fixed,
+  adaptive = FALSE
+)
+
+# Step 6: Check for data issues (see code above)
+
+# Step 7: Adjust k
+gwpca_result <- gwpca(
+  data = gwpca_data_sp,
+  vars = vars,
+  k = 1,
+  robust = TRUE,
+  bw = bw,
+  adaptive = TRUE
+)
+
+# Step 8: Check package version
+packageVersion("GWmodel")
+# Update if necessary
+
+# Step 9: Use the formula interface
+pca_formula <- as.formula(paste("~", paste(vars, collapse = "+")))
+gwpca_result <- gwpca(
+  formula = pca_formula,
+  data = gwpca_data_sp,
+  k = 2,
+  robust = TRUE,
+  bw = bw,
+  adaptive = TRUE
+)
+
+
+```
+```{r}
+# Print the gwpca_result object
+print(gwpca_result)
+
+```
+
+### Mapping Local Principal Components
+```{r}
+## Geographically Weighted Principal Component Analysis (GWPCA)
+
+# Load GWmodel package
+library(GWmodel)
+
+# Prepare data for GWPCA
+gwpca_data_complete <- gwpca_data
+
+# Convert sf to Spatial*DataFrame for GWmodel
+gwpca_data_sp <- as(gwpca_data_complete, "Spatial")
+
+# Manually specify a smaller bandwidth (e.g., 50)
+bw_manual <- 50
+
+# Perform GWPCA with pca.gw = TRUE and specified bandwidth
+gwpca_result <- gwpca(
+  data = gwpca_data_sp,
+  vars = vars,
+  k = 2,
+  robust = TRUE,
+  bw = bw_manual,
+  adaptive = TRUE,
+  pca.gw = TRUE,       # Enable local PCA
+  scores = TRUE,
+  verbose = TRUE       # Display messages during execution
+)
+
+# Check the gwpca_result object
+print(gwpca_result)
+
+# Extract local scores and add to spatial data
+if (!is.null(gwpca_result$local.scores)) {
+  local_scores <- as.data.frame(gwpca_result$local.scores)
+  
+  # Verify that local_scores has the expected dimensions
+  print(dim(local_scores))
+  
+  # Ensure that local_scores has at least two columns
+  if (ncol(local_scores) >= 2) {
+    gwpca_data_complete$LocalPC1 <- local_scores[, 1]
+    gwpca_data_complete$LocalPC2 <- local_scores[, 2]
+  } else {
+    stop("Local scores do not have enough components.")
+  }
+} else {
+  stop("Local scores are not available in gwpca_result.")
+}
+
+```
+
+Visualize the spatial variation of the first local principal component.
+
+```{r}
+# Map Local PC1
+plot_local_pc1 <- ggplot(gwpca_data_complete) +
+  geom_sf(aes(fill = LocalPC1)) +
+  scale_fill_viridis_c(option = "plasma") +
+  theme_minimal() +
+  labs(title = "Local PC1 from GWPCA", fill = "Local PC1")
+
+print(plot_local_pc1)
+```
+
+## Conclusion
+
+This notebook provided a comprehensive analysis of heat vulnerability in Johannesburg, incorporating corrected code and enhanced visualizations. We performed data preparation, exploratory data analysis, PCA with enhanced visualization, calculation and mapping of HVI, spatial autocorrelation analysis, and GWPCA to gain insights into the spatial dynamics of heat vulnerability.
+
+## Notes
+
+- **Data Paths:** Ensure that the file paths to your spatial data are correct.
+- **Variable Names:** We have updated the variable names to match exactly with those in your data.
+- **Package Installation:** If any packages are not installed, you can install them using `install.packages("package_name")`.
+- **CRS Transformation:** Ensure that all spatial data are in the same Coordinate Reference System (CRS) for accurate spatial analysis.
+- **Handling Missing Data:** We used `drop_na()` to remove rows with missing data for analyses that require complete cases.
+- **Numeric Variables:** All variables used in PCA and GWPCA must be numeric.
+- **Visualizations:** We enhanced the correlation matrix and PCA plots by grouping variables and adjusting color schemes for better interpretation.
+
+## References
+
+- **GWmodel Package:** [GWmodel Documentation](https://cran.r-project.org/web/packages/GWmodel/GWmodel.pdf)
+- **spdep Package:** [spdep Documentation](https://cran.r-project.org/web/packages/spdep/spdep.pdf)
+- **factoextra Package:** [factoextra Documentation](https://cran.r-project.org/web/packages/factoextra/factoextra.pdf)
+- **corrplot Package:** [corrplot Documentation](https://cran.r-project.org/web/packages/corrplot/corrplot.pdf)
+- **ggcorrplot Package:** [ggcorrplot Documentation](https://cran.r-project.org/web/packages/ggcorrplot/ggcorrplot.pdf)
+
+## Session Information
+
+```{r}
+sessionInfo()
+```
+
+---
+
+**Please note**: The code provided assumes that all necessary data files are correctly placed and that the variable names match those in your datasets. Adjust paths and variable names as needed based on your actual data.
+
+Let me know if you have any questions or need further assistance!
