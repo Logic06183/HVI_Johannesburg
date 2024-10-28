@@ -450,128 +450,73 @@ print(plot_lisa)
 Perform GWPCA to understand how the principal components vary spatially.
 
 ```{r}
-## Step 1: Examine the gwpca_result object
-str(gwpca_result)
-
-# Step 2: Verify function arguments
-args(gwpca)
-
-# Step 3: Update the function call (if necessary)
-gwpca_result <- gwpca(
-  data = gwpca_data_sp,
-  vars = vars,
-  k = 2,
-  robust = TRUE,
-  bw = bw
-  # Removed adaptive and scores arguments if not recognized
-)
-
-# Step 4: Try different bandwidth values
-bw_smaller <- 50  # Adjust as needed
-gwpca_result <- gwpca(
-  data = gwpca_data_sp,
-  vars = vars,
-  k = 2,
-  robust = TRUE,
-  bw = bw_smaller,
-  adaptive = TRUE
-)
-
-# Step 5: Use fixed bandwidth
-bw_fixed <- 10000  # Adjust as appropriate
-gwpca_result <- gwpca(
-  data = gwpca_data_sp,
-  vars = vars,
-  k = 2,
-  robust = TRUE,
-  bw = bw_fixed,
-  adaptive = FALSE
-)
-
-# Step 6: Check for data issues (see code above)
-
-# Step 7: Adjust k
-gwpca_result <- gwpca(
-  data = gwpca_data_sp,
-  vars = vars,
-  k = 1,
-  robust = TRUE,
-  bw = bw,
-  adaptive = TRUE
-)
-
-# Step 8: Check package version
-packageVersion("GWmodel")
-# Update if necessary
-
-# Step 9: Use the formula interface
-pca_formula <- as.formula(paste("~", paste(vars, collapse = "+")))
-gwpca_result <- gwpca(
-  formula = pca_formula,
-  data = gwpca_data_sp,
-  k = 2,
-  robust = TRUE,
-  bw = bw,
-  adaptive = TRUE
-)
-
-
-```
-```{r}
-# Print the gwpca_result object
-print(gwpca_result)
-
-```
-
-### Mapping Local Principal Components
-```{r}
-## Geographically Weighted Principal Component Analysis (GWPCA)
-
-# Load GWmodel package
-library(GWmodel)
-
 # Prepare data for GWPCA
 gwpca_data_complete <- gwpca_data
 
 # Convert sf to Spatial*DataFrame for GWmodel
 gwpca_data_sp <- as(gwpca_data_complete, "Spatial")
 
-# Manually specify a smaller bandwidth (e.g., 50)
-bw_manual <- 50
+# Estimate bandwidth (if not already done)
+bw <- bw.gwpca(
+  data = gwpca_data_sp,
+  vars = vars,
+  k = 2,
+  robust = TRUE,
+  adaptive = TRUE
+)
 
-# Perform GWPCA with pca.gw = TRUE and specified bandwidth
+# Perform GWPCA
 gwpca_result <- gwpca(
   data = gwpca_data_sp,
   vars = vars,
   k = 2,
   robust = TRUE,
-  bw = bw_manual,
+  bw = bw,
   adaptive = TRUE,
-  pca.gw = TRUE,       # Enable local PCA
-  scores = TRUE,
-  verbose = TRUE       # Display messages during execution
+  scores = TRUE
 )
 
-# Check the gwpca_result object
+# Print the gwpca_result object
 print(gwpca_result)
 
-# Extract local scores and add to spatial data
-if (!is.null(gwpca_result$local.scores)) {
-  local_scores <- as.data.frame(gwpca_result$local.scores)
-  
-  # Verify that local_scores has the expected dimensions
-  print(dim(local_scores))
-  
-  # Ensure that local_scores has at least two columns
-  if (ncol(local_scores) >= 2) {
-    gwpca_data_complete$LocalPC1 <- local_scores[, 1]
-    gwpca_data_complete$LocalPC2 <- local_scores[, 2]
-  } else {
-    stop("Local scores do not have enough components.")
+# Extract scores
+num_components <- 2
+scores_matrix <- matrix(NA, nrow = length(gwpca_result$gwpca.scores), ncol = num_components)
+colnames(scores_matrix) <- paste0("PC", 1:num_components)
+
+for (i in 1:length(gwpca_result$gwpca.scores)) {
+  local_scores <- gwpca_result$gwpca.scores[[i]]
+  if (!is.null(local_scores)) {
+    if (ncol(local_scores) >= num_components) {
+      scores_matrix[i, ] <- local_scores[1, 1:num_components]
+    } else {
+      scores_matrix[i, 1:ncol(local_scores)] <- local_scores[1, ]
+    }
   }
-} else {
-  stop("Local scores are not available in gwpca_result.")
 }
+
+# Add scores to gwpca_sf
+gwpca_sf <- st_as_sf(gwpca_result$SDF)
+gwpca_sf <- cbind(gwpca_sf, as.data.frame(scores_matrix))
+
+# Check the result
+head(gwpca_sf)
+
+
+
+```
+```{r}
+
+
+```
+
+### Mapping Local Principal Components
+```{r}
+
+
+
+
+
 
 ```
 
@@ -580,12 +525,7 @@ Visualize the spatial variation of the first local principal component.
 ```{r}
 # Map Local PC1
 plot_local_pc1 <- ggplot(gwpca_data_complete) +
-  geom_sf(aes(fill = LocalPC1)) +
-  scale_fill_viridis_c(option = "plasma") +
-  theme_minimal() +
-  labs(title = "Local PC1 from GWPCA", fill = "Local PC1")
-
-print(plot_local_pc1)
+  geom
 ```
 
 ## Conclusion
