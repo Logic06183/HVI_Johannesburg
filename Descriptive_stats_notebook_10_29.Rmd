@@ -1,0 +1,341 @@
+It appears that you're encountering an error due to the use of `st_set_geometry(NULL)` on a `SpatialPolygonsDataFrame` object from the `sp` package. The `st_set_geometry()` function is designed for `sf` objects from the `sf` package, not for `sp` objects. 
+
+To resolve this issue, you need to convert your `SpatialPolygonsDataFrame` to an `sf` object before proceeding with the `st_set_geometry(NULL)` function. Here's how you can modify your code to fix the error.
+
+---
+
+## Updated R Notebook
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+---
+
+title: "Summary Statistics: Enhanced Table with Full Labels"
+output: html_notebook
+
+---
+
+## Introduction
+
+In this notebook, we will create a well-formatted and visually appealing table of descriptive statistics with full labels instead of abbreviations. We will use the `kableExtra` and `gt` packages to produce attractive outputs. This approach helps in presenting the summary statistics in a more readable and professional manner, especially when dealing with variables that have abbreviations or cryptic names.
+
+## Install Required Packages
+
+First, we need to install and load the required packages. If you already have these packages installed, you can skip the installation step.
+
+```{r}
+# Install required packages if not already installed
+if (!require("sf")) install.packages("sf")
+if (!require("dplyr")) install.packages("dplyr")
+if (!require("kableExtra")) install.packages("kableExtra")
+if (!require("gt")) install.packages("gt")
+if (!require("tidyr")) install.packages("tidyr")
+if (!require("tibble")) install.packages("tibble")
+```
+
+## Load Libraries
+
+Now, let's load the libraries we will be using in this notebook.
+
+```{r}
+# Load the necessary libraries
+library(sf)          # Spatial data operations
+library(dplyr)       # Data manipulation
+library(kableExtra)  # To create well-formatted tables
+library(gt)          # Another option for attractive tables
+library(tidyr)       # For data reshaping functions
+library(tibble)      # For data frame manipulations
+```
+
+## Load Data
+
+We will use your dataset `cleaned_data_sp`, which should be loaded into your R environment. This dataset is expected to be a `SpatialPolygonsDataFrame` object from the `sp` package.
+
+**Important:** Since `st_set_geometry()` works with `sf` objects, we need to convert `cleaned_data_sp` to an `sf` object using `st_as_sf()`.
+
+```{r}
+# Convert cleaned_data_sp to an sf object
+gwpca_data <- st_as_sf(cleaned_data_sp)
+```
+
+If you haven't already loaded `cleaned_data_sp` into your environment, load it using the appropriate function. For example:
+
+```{r}
+# Example: Load the cleaned_data_sp dataset from a shapefile
+# Replace 'path/to/cleaned_data_sp.shp' with your actual file path
+# cleaned_data_sp <- readOGR("path/to/cleaned_data_sp.shp")
+```
+
+**Note:** Replace the above code with the correct function to load your dataset if it's not already loaded.
+
+## Create a Summary Statistics Table
+
+### Compute Summary Statistics
+
+We will compute the mean, standard deviation, median, minimum, and maximum for each numeric variable in the dataset.
+
+```{r}
+# Ensure that we are working with numeric variables only
+numeric_vars <- gwpca_data %>%
+  st_set_geometry(NULL) %>%  # Remove geometry for summary stats
+  select(where(is.numeric))
+
+# Compute summary statistics
+summary_stats <- numeric_vars %>%
+  summarise(across(everything(), list(
+    mean = ~mean(.x, na.rm = TRUE),
+    sd = ~sd(.x, na.rm = TRUE),
+    median = ~median(.x, na.rm = TRUE),
+    min = ~min(.x, na.rm = TRUE),
+    max = ~max(.x, na.rm = TRUE)
+  ), .names = "{.col}_{.fn}"))
+```
+
+### Reshape Data for Better Display
+
+We will reshape the data from wide to long format to facilitate the replacement of abbreviations and better organize the statistics.
+
+```{r}
+# Reshape data to long format
+summary_stats_long <- summary_stats %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = c("Variable", "Statistic"),
+    names_sep = "_",
+    values_to = "Value"
+  )
+```
+
+### Replace Abbreviations with Full Labels
+
+We'll replace the abbreviated variable names with their full descriptive labels to make the table more understandable.
+
+**Note:** Ensure that the variable names in your `cleaned_data_sp` dataset match those in the `full_labels` vector below. Adjust the `full_labels` vector as necessary.
+
+```{r}
+# Replace abbreviations with full labels
+full_labels <- c(
+  "OBJECTID_" = "Object ID",
+  "WardID_" = "Ward ID",
+  "WardNo_" = "Ward Number",
+  "crowded_dwellings" = "Crowded Dwellings (%)",
+  "no_piped_water" = "Households Without Piped Water (%)",
+  "using_public_healthcare_facilities" = "Using Public Healthcare Facilities (%)",
+  "poor_health_status" = "Poor Health Status (%)",
+  "failed_to_find_healthcare_when_needed" = "Failed to Find Healthcare When Needed (%)",
+  "no_medical_insurance" = "No Medical Insurance (%)",
+  "household_hunger_risk" = "Household Hunger Risk (%)",
+  "benefiting_from_school_feeding_scheme" = "Benefiting from School Feeding Scheme (%)",
+  "UTFVI" = "Urban Thermal Field Variance Index",
+  "LST" = "Land Surface Temperature (°C)",
+  "NDVI" = "Normalized Difference Vegetation Index (NDVI)",
+  "NDBI__mean" = "Normalized Difference Built-up Index (Mean)",
+  "concern_he" = "Concerned About Heat (%)",
+  "cancer_pro" = "Cancer Proportion (%)",
+  "diabetes_p" = "Diabetes Proportion (%)",
+  "pneumonia_" = "Pneumonia Proportion (%)",
+  "heart_dise" = "Heart Disease Proportion (%)",
+  "hypertensi" = "Hypertension Proportion (%)",
+  "hiv_prop" = "HIV Proportion (%)",
+  "tb_prop" = "Tuberculosis Proportion (%)",
+  "covid_prop" = "COVID-19 Proportion (%)",
+  "60_plus_pr" = "60+ Population Proportion (%)",
+  "Ward_HVI_1_OBJECTID_" = "Ward HVI Object ID",
+  "Ward_HVI_1_WardNo_" = "Ward Number (HVI)",
+  "Ward_HVI_1_HVI_PC1" = "HVI Principal Component 1",
+  "Ward_HVI_1_HVI_weighted" = "HVI Weighted Score",
+  "Ward_HVI_1_HVI_PC1_standardized" = "Standardized HVI PC1",
+  "Ward_HVI_1_HVI_weighted_standardized" = "Standardized HVI Weighted",
+  "HVI_PC1" = "Heat Vulnerability Index (PC1)",
+  "HVI_PC1_standardized" = "Standardized Heat Vulnerability Index (PC1)",
+  "HVI_weighted" = "Heat Vulnerability Weighted Score",
+  "HVI_weighted_standardized" = "Standardized Heat Vulnerability Weighted Score",
+  "Climate_PC1" = "Climate Principal Component 1",
+  "SocioEcon_PC1" = "Socioeconomic Principal Component 1",
+  "LISA_Cluster" = "LISA Cluster Type",
+  "LISA_Type" = "LISA Type Description",
+  "CVI" = "Climate Vulnerability Index",
+  "CVI_standardized" = "Standardized Climate Vulnerability Index",
+  "Ward_Category" = "Ward Category",
+  "Cluster" = "Cluster ID",
+  "coord_x" = "X Coordinate",
+  "coord_y" = "Y Coordinate"
+  # Add other variables as needed
+)
+
+summary_stats_long <- summary_stats_long %>%
+  mutate(
+    Variable = recode(Variable, !!!full_labels),
+    Statistic = recode(Statistic,
+                       "mean" = "Mean",
+                       "sd" = "Standard Deviation",
+                       "median" = "Median",
+                       "min" = "Minimum",
+                       "max" = "Maximum")
+  )
+```
+
+```{r}
+
+```
+
+
+
+### Convert to Wide Format for Better Presentation
+
+We'll pivot the data back to wide format to present each variable's statistics in a single row.
+
+```{r}
+# Reshape data to long format using names_pattern
+summary_stats_long <- summary_stats %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = c("Variable", "Statistic"),
+    names_pattern = "^(.*)_(mean|sd|median|min|max)$",
+    values_to = "Value"
+  )
+
+```
+
+### Display the Summary Statistics using `kableExtra`
+
+Finally, we'll display the summary statistics in a nicely formatted table using `kableExtra`.
+
+```{r}
+# Display the table using kableExtra
+summary_stats_wide %>%
+  kbl(caption = "Descriptive Statistics for Heat Vulnerability Variables in Johannesburg") %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+## Alternative: Using `gt` for Enhanced Tables
+
+As an alternative, we can use the `gt` package to create an interactive and more customizable table.
+
+```{r}
+# Create a summary table using the gt package
+summary_stats_gt <- summary_stats_wide %>%
+  gt() %>%
+  tab_header(
+    title = "Descriptive Statistics for Heat Vulnerability Variables",
+    subtitle = "Johannesburg Heat Vulnerability Analysis"
+  ) %>%
+  fmt_number(
+    columns = c("Mean", "Standard Deviation", "Median", "Minimum", "Maximum"),
+    decimals = 2
+  ) %>%
+  cols_label(
+    Variable = "Variable Name",
+    Mean = "Mean",
+    `Standard Deviation` = "Standard Deviation",
+    Median = "Median",
+    Minimum = "Minimum",
+    Maximum = "Maximum"
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_title(groups = "title")
+  )
+
+# Print the gt table
+summary_stats_gt
+```
+
+## Notes
+
+- **Conversion to `sf`:** The error you encountered was due to using `st_set_geometry()` on a `SpatialPolygonsDataFrame` object. By converting it to an `sf` object using `st_as_sf()`, we can use `sf` functions without issues.
+- **Numeric Variables Only:** We selected only numeric variables before computing summary statistics to avoid errors with non-numeric data types.
+- **Variable Name Consistency:** Ensure that the variable names in your dataset match those used in the `full_labels` vector. Adjust the labels as necessary.
+- **Package Installation Check:** Included all necessary packages and ensured they are loaded.
+- **Handling Missing Values:** We used `na.rm = TRUE` in the summary functions to handle missing values.
+- **Customization:** Adjust the number of decimals and other formatting options as needed to suit your audience.
+
+---
+```{r}
+# Ensure that we are working with numeric variables only
+numeric_vars <- gwpca_data %>%
+  st_set_geometry(NULL) %>%  # Remove geometry for summary stats
+  select(where(is.numeric))
+
+# Compute summary statistics
+summary_stats <- numeric_vars %>%
+  summarise(across(everything(), list(
+    mean = ~mean(.x, na.rm = TRUE),
+    sd = ~sd(.x, na.rm = TRUE),
+    median = ~median(.x, na.rm = TRUE),
+    min = ~min(.x, na.rm = TRUE),
+    max = ~max(.x, na.rm = TRUE)
+  ), .names = "{.col}_{.fn}"))
+
+# Reshape data to long format using names_pattern
+summary_stats_long <- summary_stats %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = c("Variable", "Statistic"),
+    names_pattern = "^(.*)_(mean|sd|median|min|max)$",
+    values_to = "Value"
+  )
+
+# Replace abbreviations with full labels
+# (Ensure that the variable names in full_labels match those in your data)
+full_labels <- c(
+  # Add your variable name mappings here
+)
+
+summary_stats_long <- summary_stats_long %>%
+  mutate(
+    Variable = recode(Variable, !!!full_labels),
+    Statistic = recode(Statistic,
+                       "mean" = "Mean",
+                       "sd" = "Standard Deviation",
+                       "median" = "Median",
+                       "min" = "Minimum",
+                       "max" = "Maximum")
+  )
+
+# Convert back to wide format
+summary_stats_wide <- summary_stats_long %>%
+  pivot_wider(names_from = Statistic, values_from = Value)
+
+```
+
+**Summary of Fixes:**
+
+- **Converted `SpatialPolygonsDataFrame` to `sf` Object:** Used `st_as_sf()` to convert your `cleaned_data_sp` to an `sf` object, allowing the use of `st_set_geometry(NULL)`.
+- **Selected Numeric Variables:** Ensured only numeric variables are used in the summary statistics to prevent errors with non-numeric data.
+- **Updated Code Examples:** Provided updated code snippets reflecting these changes.
+- **Detailed Explanation:** Included explanations to help you understand why the error occurred and how the solution fixes it.
+
+---
+
+## Additional Assistance
+
+If you continue to experience issues, consider the following:
+
+- **Check Data Types:** Use `str(gwpca_data)` to inspect the structure of your data and ensure that the variables are of the expected data types.
+  
+  ```{r}
+  # Inspect data structure
+  str(gwpca_data)
+  ```
+  
+- **Update `full_labels`:** If your variable names differ from those in the `full_labels` vector, update the vector accordingly to match your data.
+
+- **Non-Numeric Variables:** If you have categorical variables encoded as factors or characters that you wish to include, you'll need to handle them separately, as summary statistics like mean and standard deviation do not apply.
+
+- **Session Information:** To debug issues related to package versions, you can include your session information.
+
+  ```{r}
+  # Display session information
+  sessionInfo()
+  ```
+
+- **Data Privacy:** Ensure that sharing your data complies with your organization's data privacy policies.
+
+---
+
+Feel free to reach out if you have any more questions or need further assistance!

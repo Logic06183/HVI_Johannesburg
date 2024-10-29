@@ -44,27 +44,108 @@ geometry <- st_transform(geometry, crs = 32735)
 
 
 ```{r}
-# Read spatial data (replace with your actual data file paths)
-gwpca_sf <- st_read("C:/Users/CraigParker/OneDrive - Wits PHR/Desktop/HVI_Johannesburg")
+# Load necessary libraries
+library(sf)            # For handling spatial data
+library(sp)            # Spatial data classes
+library(dplyr)         # Data manipulation
+library(ggplot2)       # Data visualization
+library(corrplot)      # Correlation plots
+library(psych)         # PCA and psychometric analysis
+library(GWmodel)       # Geographically Weighted Models
+library(spdep)         # Spatial dependence analysis
+library(factoextra)    # Visualization for PCA
+library(spgwr)         # Geographically Weighted Regression
+library(spData)        # Sample spatial data
+library(RColorBrewer)  # Color palettes
+library(viridis)       # Color palettes
+library(tidyr)         # Data reshaping (for pivot_longer)
 
-# If the data is in a different CRS, transform it to a common CRS
-gwpca_sf <- st_transform(gwpca_sf, crs = 32735)  # WGS 84 / UTM zone 35S
+# Set working directory
+setwd("C:/Users/CraigParker/OneDrive - Wits PHR/Desktop/HVI_Johannesburg")
 
-# List of variables to be used in the analysis
-vars <- c("Crowded.dwellings", "No.piped.water", "No.sewerage", 
-          "No.electricity", "Unemployment", "No.education", 
-          "Poverty", "Poor.health.status", "hypertensi", 
-          "diabetes", "heatch")
+# Read data
+data <- read.csv('data.csv', header = TRUE)
+geometry <- st_read("geometry.shp")
+geometry <- st_transform(geometry, crs = 32735)
 
-# Check for missing values and handle them
-gwpca_sf <- gwpca_sf %>% 
-  select(all_of(vars), geometry) %>% 
-  na.omit()
+# Ensure consistent IDs (replace 'WardID_' with your actual key column)
+data$WardID_ <- as.character(data$WardID_)
+geometry$WardID_ <- as.character(geometry$WardID_)
 
-# Ensure all variables are numeric
-for (var in vars) {
-  gwpca_sf[[var]] <- as.numeric(gwpca_sf[[var]])
+# Merge datasets
+merged_data <- merge(
+  geometry[, c("WardID_", "geometry")],
+  data,
+  by = "WardID_",
+  all.x = TRUE
+)
+
+# Define variables
+vars <- c(
+  "Crowded.dwellings", "No.piped.water", "Using.public.healthcare.facilities",
+  "Poor.health.status", "Failed.to.find.healthcare.when.needed",
+  "No.medical.insurance", "Household.hunger.risk",
+  "Benefiting.from.school.feeding.scheme", "UTFVI", "LST", "NDVI",
+  "NDBI__mean", "concern_he", "cancer_pro", "diabetes_p", "pneumonia_",
+  "heart_dise", "hypertensi", "hiv_prop", "tb_prop", "covid_prop",
+  "X60_plus_pr"
+)
+
+# Check for missing variables
+missing_vars <- setdiff(vars, names(merged_data))
+if (length(missing_vars) > 0) {
+  stop("Missing variables: ", paste(missing_vars, collapse = ", "))
 }
+
+# Ensure variables are numeric
+for (var in vars) {
+  if (!is.numeric(merged_data[[var]])) {
+    merged_data[[var]] <- as.numeric(as.character(merged_data[[var]]))
+  }
+}
+
+# Remove rows with missing data
+merged_data_no_geom <- st_drop_geometry(merged_data)
+rows_complete <- complete.cases(merged_data_no_geom[vars])
+merged_data <- merged_data[rows_complete, ]
+merged_data_no_geom <- merged_data_no_geom[rows_complete, ]
+
+# Compute descriptive statistics
+summary_stats <- merged_data_no_geom %>%
+  select(all_of(vars)) %>%
+  summarise(across(everything(), list(
+    mean = ~mean(.),
+    sd = ~sd(.),
+    median = ~median(.),
+    min = ~min(.),
+    max = ~max(.)
+  )))
+
+# Reshape to long format using names_pattern
+summary_stats_long <- summary_stats %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = c("Variable", "Statistic"),
+    names_pattern = "^(.*)_(mean|sd|median|min|max)$"
+  )
+
+# View the summary statistics
+print(summary_stats_long)
+
+# Compute correlation matrix
+corr_matrix <- cor(
+  merged_data_no_geom %>% select(all_of(vars)),
+  use = "complete.obs"
+)
+
+# Visualize correlation matrix
+corrplot(corr_matrix, method = "circle")
+
+
+
+
+
+
 ```
 
 # Exploratory Data Analysis
