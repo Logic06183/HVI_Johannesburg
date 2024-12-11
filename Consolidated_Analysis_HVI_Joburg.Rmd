@@ -1,0 +1,416 @@
+---
+title: "Heat Vulnerability Index Analysis - Johannesburg"
+author: "Craig Parker"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 10,
+  fig.height = 6
+)
+```
+
+# Introduction
+
+This notebook implements the heat vulnerability analysis for Johannesburg as detailed in our paper. The analysis integrates environmental, socio-economic, and health data to assess spatial patterns of heat vulnerability across 135 urban wards.
+
+# Load Required Libraries
+
+```{r libraries}
+# Load required libraries
+library(GWmodel)
+library(sp)
+library(sf)
+library(dplyr)
+library(ggplot2)
+library(viridis)
+library(corrplot)
+library(rlang)
+library(psych)
+library(tidyr)
+library(spdep)
+library(RColorBrewer)
+library(factoextra)
+library(mice)
+```
+
+# Data Preparation
+
+## Read and Prepare Data
+
+```{r data-prep}
+# Read data
+data <- read.csv('data.csv', header = TRUE)
+geometry <- st_read("geometry.shp")
+geometry <- st_transform(geometry, crs = 32735)
+
+# Ensure consistent IDs
+data$WardID_ <- as.character(data$WardID_)
+geometry$WardID_ <- as.character(geometry$WardID_)
+
+# Define variables
+vars <- c(
+  "Crowded.dwellings", "No.piped.water", "Using.public.healthcare.facilities",
+  "Poor.health.status", "Failed.to.find.healthcare.when.needed",
+  "No.medical.insurance", "Household.hunger.risk",
+  "Benefiting.from.school.feeding.scheme", "UTFVI", "LST", "NDVI",
+  "NDBI__mean", "concern_he", "cancer_pro", "diabetes_p", "pneumonia_",
+  "heart_dise", "hypertensi", "hiv_prop", "tb_prop", "covid_prop",
+  "X60_plus_pr"
+)
+```
+
+## Handle Missing Data
+
+```{r missing-data}
+# Merge datasets
+merged_data <- merge(geometry[, c("WardID_", "geometry")], data, by = "WardID_", all.x = TRUE)
+
+# Handle missing data using MICE
+merged_data_no_geom <- st_drop_geometry(merged_data)
+imputed_data <- mice(merged_data_no_geom[vars], m = 5, maxit = 50)
+merged_data_complete <- complete(imputed_data)
+
+# Standardize variables
+for (var in vars) {
+  merged_data[[var]] <- as.numeric(as.character(merged_data[[var]]))
+  merged_data[[var]] <- scale(merged_data[[var]])
+}
+```
+
+# Descriptive Statistics
+
+```{r descriptive-stats}
+# Compute summary statistics
+summary_stats <- merged_data_no_geom %>%
+  select(all_of(vars)) %>%
+  summarise(across(everything(), list(
+    mean = ~mean(., na.rm = TRUE),
+    sd = ~sd(., na.rm = TRUE),
+    min = ~min(., na.rm = TRUE),
+    q25 = ~quantile(., 0.25, na.rm = TRUE),
+    median = ~median(., na.rm = TRUE),
+    q75 = ~quantile(., 0.75, na.rm = TRUE),
+    max = ~max(., na.rm = TRUE)
+  )))
+
+# Display summary statistics
+knitr::kable(t(summary_stats), digits = 2)
+```
+
+# Correlation Analysis
+
+## Test for Normality
+
+```{r normality-test}
+# Test for normality
+shapiro_results <- lapply(merged_data_no_geom[vars], shapiro.test)
+normality_summary <- data.frame(
+  Variable = vars,
+  Shapiro_p_value = sapply(shapiro_results, function(x) x$p.value)
+)
+
+# Display normality test results
+knitr::kable(normality_summary, digits = 3)
+```
+
+## Compute Correlations
+
+```{r correlations}
+# Compute both Pearson and Spearman correlations
+pearson_corr <- cor(merged_data_no_geom[vars], 
+                    use = "pairwise.complete.obs", 
+                    method = "pearson")
+spearman_corr <- cor(merged_data_no_geom[vars], 
+                     use = "pairwise.complete.obs", 
+                     method = "spearman")
+
+# Plot correlation matrices
+par(mfrow = c(1, 2))
+corrplot(pearson_corr, method = "color", type = "upper", 
+         order = "hclust",
+         tl.cex = 0.4, tl.col = "black", tl.srt = 45,
+         addCoef.col = "black", number.cex = 0.3,
+         title = "Pearson Correlation Matrix")
+corrplot(spearman_corr, method = "color", type = "upper", 
+         order = "hclust",
+         tl.cex = 0.4, tl.col = "black", tl.srt = 45,
+         addCoef.col = "black", number.cex = 0.3,
+         title = "Spearman Correlation Matrix")
+```
+```{r}
+# Calculate updated correlation matrix using Spearman
+# First ensure we have all required variables
+key_vars <- data.frame(
+  LST = merged_data_no_geom$LST,
+  NDVI = merged_data_no_geom$NDVI,
+  Healthcare_Access = merged_data_no_geom$Using.public.healthcare.facilities,
+  Poverty_Index = merged_data_no_geom$Household.hunger.risk
+)
+
+# Calculate Spearman correlations
+spearman_cor <- cor(key_vars, method = "spearman", use = "pairwise.complete.obs")
+
+# Calculate p-values for correlations
+spearman_p <- matrix(NA, 4, 4)
+for(i in 1:4) {
+  for(j in 1:4) {
+    test <- cor.test(key_vars[,i], key_vars[,j], 
+                     method = "spearman", 
+                     exact = FALSE)
+    spearman_p[i,j] <- test$p.value
+  }
+}
+
+# Format correlation matrix for table
+table5_matrix <- round(spearman_cor, 2)
+rownames(table5_matrix) <- c("LST", "NDVI", "Healthcare Access", "Poverty Index")
+colnames(table5_matrix) <- c("LST", "NDVI", "Healthcare Access", "Poverty Index")
+
+# Add significance stars
+table5_matrix_with_stars <- matrix("", 4, 4)
+for(i in 1:4) {
+  for(j in 1:4) {
+    stars <- if(spearman_p[i,j] < 0.001) "***" else if(spearman_p[i,j] < 0.01) "**" else if(spearman_p[i,j] < 0.05) "*" else ""
+    table5_matrix_with_stars[i,j] <- paste0(table5_matrix[i,j], stars)
+  }
+}
+
+# Print formatted table
+print("Table 5: Correlation Matrix of Key Variables (Spearman's rho)")
+print(table5_matrix_with_stars)
+
+# Save table to CSV
+write.csv(table5_matrix_with_stars, "table5_spearman.csv")
+
+# Print correlations with p-values for paper text
+cat("\nKey correlations for paper text:\n")
+cat("LST & NDVI: r =", table5_matrix[1,2], ", p <", format.pval(spearman_p[1,2], digits = 3), "\n")
+cat("LST & Healthcare Access: r =", table5_matrix[1,3], ", p <", format.pval(spearman_p[1,3], digits = 3), "\n")
+cat("LST & Poverty Index: r =", table5_matrix[1,4], ", p <", format.pval(spearman_p[1,4], digits = 3), "\n")
+cat("Healthcare Access & Poverty Index: r =", table5_matrix[3,4], ", p <", format.pval(spearman_p[3,4], digits = 3), "\n")
+```
+
+```{r}
+# Get raw percentages for healthcare access
+# First unstandardize the data if needed
+healthcare_summary <- merged_data %>%
+  select(WardID_, Using.public.healthcare.facilities) %>%
+  mutate(
+    percentage = Using.public.healthcare.facilities * 100,  # Convert to percentage
+    WardID_ = as.character(WardID_)
+  ) %>%
+  arrange(desc(percentage))
+
+# Display top 5 highest usage wards
+cat("\nTop 5 wards with highest public healthcare usage:\n")
+healthcare_top5 <- healthcare_summary %>%
+  slice_head(n = 5) %>%
+  mutate(percentage = round(percentage, 2))
+print(healthcare_top5)
+
+# Display bottom 5 lowest usage wards
+cat("\nBottom 5 wards with lowest public healthcare usage:\n")
+healthcare_bottom5 <- healthcare_summary %>%
+  slice_tail(n = 5) %>%
+  mutate(percentage = round(percentage, 2))
+print(healthcare_bottom5)
+
+# Calculate summary statistics
+cat("\nSummary Statistics:\n")
+cat(sprintf("Mean usage: %.2f%%\n", mean(healthcare_summary$percentage)))
+cat(sprintf("Standard deviation: %.2f%%\n", sd(healthcare_summary$percentage)))
+cat(sprintf("Range: %.2f%% to %.2f%%\n",
+            min(healthcare_summary$percentage),
+            max(healthcare_summary$percentage)))
+
+# Create a boxplot to visualize the distribution
+ggplot(healthcare_summary, aes(y = percentage)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Distribution of Public Healthcare Usage Across Wards",
+       y = "Percentage of Households Using Public Healthcare") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+# GWPCA Analysis
+
+```{r gwpca}
+# Convert to Spatial object
+cleaned_data_sp <- as(merged_data, "Spatial")
+
+# Estimate bandwidth
+bw <- bw.gwpca(
+  data = cleaned_data_sp,
+  vars = vars,
+  k = 3,
+  robust = TRUE,
+  adaptive = TRUE
+)
+
+# Perform GWPCA
+gwpca_result <- gwpca(
+  data = cleaned_data_sp,
+  vars = vars,
+  k = 3,
+  robust = TRUE,
+  bw = bw,
+  adaptive = TRUE,
+  scores = TRUE
+)
+
+# Bootstrap for confidence intervals
+n_boot <- 1000
+variance_boot <- matrix(NA, nrow = n_boot, ncol = 3)
+for(i in 1:n_boot) {
+  boot_idx <- sample(1:nrow(merged_data), replace = TRUE)
+  boot_pca <- prcomp(merged_data_no_geom[boot_idx, vars], scale. = TRUE)
+  variance_boot[i,] <- boot_pca$sdev[1:3]^2 / sum(boot_pca$sdev^2) * 100
+}
+variance_ci <- apply(variance_boot, 2, quantile, c(0.025, 0.975))
+
+# Display results
+print("Variance Explained with 95% CI:")
+print(variance_ci)
+```
+
+# HVI Calculation and Mapping
+```{r hvi-calculation}
+# HVI Calculation - Fixing score extraction
+# First extract the scores from gwpca_result directly
+n_locs <- length(gwpca_result$gwpca.scores)
+scores_matrix <- matrix(NA, nrow = n_locs, ncol = 3)
+colnames(scores_matrix) <- c("PC1", "PC2", "PC3")
+
+# Extract scores from each location's matrix
+for(i in 1:n_locs) {
+  if(!is.null(gwpca_result$gwpca.scores[[i]])) {
+    # Each element contains a matrix - take the first row for the scores
+    scores_matrix[i,] <- as.numeric(gwpca_result$gwpca.scores[[i]][1, 1:3])
+  }
+}
+
+# Print diagnostics for scores
+print("Summary of extracted PC scores:")
+print(summary(as.data.frame(scores_matrix)))
+
+# Create SF object with scores
+gwpca_sf <- st_as_sf(gwpca_result$SDF)
+gwpca_sf$PC1 <- scores_matrix[,1]
+gwpca_sf$PC2 <- scores_matrix[,2]
+gwpca_sf$PC3 <- scores_matrix[,3]
+
+# Get variance explained from the GWPCA results
+var_exp <- gwpca_result$var[1:3]
+total_var <- sum(var_exp)
+weights <- var_exp/total_var
+
+print("Component weights:")
+print(weights)
+
+# Calculate weighted components
+gwpca_sf <- gwpca_sf %>%
+  mutate(
+    PC1_weighted = PC1 * weights[1],
+    PC2_weighted = PC2 * weights[2],
+    PC3_weighted = PC3 * weights[3]
+  )
+
+# Calculate HVI
+gwpca_sf <- gwpca_sf %>%
+  mutate(
+    HVI_raw = PC1_weighted + PC2_weighted + PC3_weighted,
+    HVI = scale(HVI_raw)[,1]  # Explicitly take first column of scale output
+  )
+
+# Check results
+print("Summary of HVI calculation:")
+print(summary(gwpca_sf %>% 
+  select(PC1_weighted, PC2_weighted, PC3_weighted, HVI_raw, HVI)))
+
+# Plot HVI
+ggplot(gwpca_sf) +
+  geom_sf(aes(fill = HVI)) +
+  scale_fill_viridis(
+    option = "magma",
+    name = "Heat Vulnerability\nIndex",
+    limits = c(-3, 3)  # Set symmetric limits for z-scores
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Heat Vulnerability Index",
+    subtitle = "Standardized scores (z-scale)"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    legend.position = "right"
+  )
+
+# Save the results
+saveRDS(gwpca_sf, "gwpca_sf_with_hvi.rds")
+
+
+```
+
+
+
+```{r spatial-analysis}
+# Calculate coordinates and neighbors
+coords <- st_coordinates(st_centroid(gwpca_sf))
+nb <- dnearneigh(coords, 0, 10000)
+weights_list <- nb2listw(nb, style = "W")
+
+# Calculate Global Moran's I using numeric HVI
+global_moran <- moran.test(gwpca_sf$HVI, weights_list)
+
+# Calculate Local Moran's I
+local_moran <- localmoran(gwpca_sf$HVI, weights_list)
+
+# Calculate mean HVI
+hvi_mean <- mean(gwpca_sf$HVI, na.rm = TRUE)
+
+# Create LISA categories with proper indexing
+gwpca_sf <- gwpca_sf %>%
+  mutate(LISA_cluster = case_when(
+    HVI > hvi_mean & local_moran[, "Pr(z != E(Ii))"] < 0.05 ~ "High-High",
+    HVI < hvi_mean & local_moran[, "Pr(z != E(Ii))"] < 0.05 ~ "Low-Low",
+    HVI > hvi_mean & local_moran[, "Pr(z != E(Ii))"] < 0.05 ~ "High-Low",
+    HVI < hvi_mean & local_moran[, "Pr(z != E(Ii))"] < 0.05 ~ "Low-High",
+    TRUE ~ "Not Significant"
+  ))
+
+# Plot LISA clusters
+ggplot(gwpca_sf) +
+  geom_sf(aes(fill = LISA_cluster)) +
+  scale_fill_manual(values = c(
+    "High-High" = "red",
+    "Low-Low" = "blue",
+    "High-Low" = "pink",
+    "Low-High" = "lightblue",
+    "Not Significant" = "grey"
+  )) +
+  theme_minimal() +
+  labs(title = "LISA Cluster Map")
+
+# Save Results
+results_list <- list(
+  gwpca_sf = gwpca_sf,
+  global_moran = global_moran,
+  local_moran = local_moran,
+  variance_explained = variance_explained
+)
+
+saveRDS(results_list, "hvi_spatial_results.rds")
+```

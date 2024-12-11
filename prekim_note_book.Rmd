@@ -1,0 +1,348 @@
+---
+title: "Heat Vulnerability Analysis in Johannesburg"
+output: html_notebook
+---
+
+# Introduction
+
+This R Notebook provides a comprehensive analysis of heat vulnerability in Johannesburg using various spatial statistical methods. The analysis includes data preparation, exploratory data analysis, Global and Local Moran's I, Geographically Weighted Principal Component Analysis (GWPCA), and Geographically Weighted Regression (GWR). The notebook incorporates corrected code and explanations to guide you through each step.
+
+# Load Required Libraries
+
+First, we need to load all the necessary libraries for the analysis. If any of these packages are not installed on your system, you can install them using `install.packages("package_name")`.
+
+```{r}
+# Load necessary libraries
+library(sf)            # For handling spatial data
+library(sp)            # Spatial data classes
+library(dplyr)         # Data manipulation
+library(ggplot2)       # Data visualization
+library(corrplot)      # Correlation plots
+library(psych)         # PCA and psychometric analysis
+library(GWmodel)       # Geographically Weighted Models
+library(spdep)         # Spatial dependence analysis
+library(factoextra)    # Visualization for PCA
+library(spgwr)         # Geographically Weighted Regression
+library(spData)        # Sample spatial data
+library(RColorBrewer)  # Color palettes
+library(viridis)       # Color palettes
+```
+```{r}
+# Set working directory
+setwd("C:/Users/CraigParker/OneDrive - Wits PHR/Desktop/HVI_Johannesburg")
+```
+
+# Data Preparation
+
+In this section, we will read the spatial data and perform initial data preparation, including handling missing values and ensuring variables are correctly formatted.
+```{r}
+# Read data
+data <- read.csv('data.csv', header = TRUE)
+geometry <- st_read("geometry.shp")
+geometry <- st_transform(geometry, crs = 32735)
+```
+
+
+```{r}
+# Read spatial data (replace with your actual data file paths)
+gwpca_sf <- st_read("C:/Users/CraigParker/OneDrive - Wits PHR/Desktop/HVI_Johannesburg")
+
+# If the data is in a different CRS, transform it to a common CRS
+gwpca_sf <- st_transform(gwpca_sf, crs = 32735)  # WGS 84 / UTM zone 35S
+
+# List of variables to be used in the analysis
+vars <- c("Crowded.dwellings", "No.piped.water", "No.sewerage", 
+          "No.electricity", "Unemployment", "No.education", 
+          "Poverty", "Poor.health.status", "hypertensi", 
+          "diabetes", "heatch")
+
+# Check for missing values and handle them
+gwpca_sf <- gwpca_sf %>% 
+  select(all_of(vars), geometry) %>% 
+  na.omit()
+
+# Ensure all variables are numeric
+for (var in vars) {
+  gwpca_sf[[var]] <- as.numeric(gwpca_sf[[var]])
+}
+```
+
+# Exploratory Data Analysis
+
+Let's compute and display summary statistics for the selected variables.
+
+```{r}
+# Compute summary statistics
+summary_stats <- gwpca_sf %>%
+  st_set_geometry(NULL) %>%
+  summarise(across(all_of(vars), list(mean = mean, sd = sd, median = median, min = min, max = max)))
+
+# Reshape data for better display
+library(tidyr)
+summary_stats_long <- summary_stats %>%
+  pivot_longer(cols = everything(),
+               names_to = c("Variable", "Statistic"),
+               names_sep = "_",
+               values_to = "Value")
+
+print(summary_stats_long)
+```
+
+# Correlation Matrix and Heatmap
+
+Compute the correlation matrix and visualize it using a heatmap.
+
+```{r}
+# Compute correlation matrix
+corr_matrix <- cor(gwpca_sf %>% st_set_geometry(NULL) %>% select(all_of(vars)), use = "complete.obs")
+
+# Plot correlation heatmap
+corrplot(corr_matrix, method = "color", type = "upper", order = "hclust",
+         tl.cex = 0.7, tl.col = "black", tl.srt = 45,
+         addCoef.col = "black", number.cex = 0.7,
+         title = "Correlation Matrix of Variables")
+```
+
+# Principal Component Analysis (PCA)
+
+Perform PCA to reduce dimensionality and identify key components contributing to heat vulnerability.
+
+```{r}
+# Perform PCA
+pca_result <- prcomp(gwpca_sf %>% st_set_geometry(NULL) %>% select(all_of(vars)), scale. = TRUE)
+
+# Visualize PCA variable loadings
+fviz_pca_var(pca_result,
+             col.var = "contrib", # Color by contributions to the PCs
+             gradient.cols = c("blue", "yellow", "red"),
+             repel = TRUE) +
+  labs(title = "PCA Variable Loadings")
+```
+
+# Calculation of Heat Vulnerability Index (HVI)
+
+Compute the HVI using the first principal component.
+
+```{r}
+# Extract the first principal component
+gwpca_sf$HVI <- pca_result$x[,1]
+
+# Normalize HVI to a 0-1 scale
+gwpca_sf$HVI <- scales::rescale(gwpca_sf$HVI, to = c(0, 1))
+```
+
+# Mapping the Heat Vulnerability Index
+
+Visualize the spatial distribution of HVI across Johannesburg.
+
+```{r}
+# Plot HVI map
+plot_hvi <- ggplot(gwpca_sf) +
+  geom_sf(aes(fill = HVI)) +
+  scale_fill_viridis_c(option = "inferno") +
+  theme_minimal() +
+  labs(title = "Heat Vulnerability Index", fill = "HVI")
+
+print(plot_hvi)
+```
+
+# Identifying Top 10 Most Vulnerable Wards
+
+Highlight the top 10 wards with the highest HVI.
+
+```{r}
+# Select top 10 most vulnerable wards
+top_10_vulnerable_wards <- gwpca_sf %>%
+  arrange(desc(HVI)) %>%
+  slice(1:10)
+
+# Plot the top 10 wards
+plot_top_10_hvi <- ggplot() +
+  geom_sf(data = gwpca_sf, aes(fill = HVI), alpha = 0.6) +
+  geom_sf(data = top_10_vulnerable_wards, fill = "black", color = "black", size = 0.7, alpha = 0.8) +
+  scale_fill_viridis_c(option = "inferno") +
+  theme_minimal() +
+  labs(title = "Top 10 Most Vulnerable Wards in Johannesburg", fill = "HVI")
+
+print(plot_top_10_hvi)
+```
+
+# Global and Local Moran's I
+
+Assess spatial autocorrelation in HVI using Global and Local Moran's I statistics.
+
+```{r}
+library(spdep)
+
+# Convert sf object to spatial object for spdep
+gwpca_sp <- as(gwpca_sf, "Spatial")
+
+# Create spatial weights matrix
+neighbors <- poly2nb(gwpca_sf)
+weights <- nb2listw(neighbors, style = "W")
+
+# Calculate Global Moran's I
+global_moran <- moran.test(gwpca_sf$HVI, listw = weights)
+print(global_moran)
+
+# Calculate Local Moran's I
+local_moran <- localmoran(gwpca_sf$HVI, listw = weights)
+
+# Add Local Moran's I results to the sf dataframe
+gwpca_sf$LocalI <- local_moran[, "Ii"]
+gwpca_sf$LocalI_pvalue <- local_moran[, "Pr(z != E(Ii))"]
+
+# Map the Local Moran's I
+plot_lisa <- ggplot(gwpca_sf) +
+  geom_sf(aes(fill = LocalI)) +
+  scale_fill_distiller(palette = "RdBu", direction = 1) +
+  theme_minimal() +
+  labs(title = "Local Moran's I for HVI", fill = "Local I")
+
+print(plot_lisa)
+```
+
+# Geographically Weighted Principal Component Analysis (GWPCA)
+
+Perform GWPCA to understand how the principal components vary spatially.
+
+```{r}
+library(GWmodel)
+
+# Define bandwidth for GWPCA
+bw_gwpca <- bw.gwpca(gwpca_sf %>% st_set_geometry(NULL) %>% select(all_of(vars)),
+                     coords = st_coordinates(st_centroid(gwpca_sf)),
+                     k = 20)
+
+# Perform GWPCA
+gwpca_result <- gwpca(gwpca_sf %>% st_set_geometry(NULL) %>% select(all_of(vars)),
+                      coords = st_coordinates(st_centroid(gwpca_sf)),
+                      bw = bw_gwpca,
+                      k = 2)
+
+# Extract local scores and add to spatial data
+local_scores <- as.data.frame(gwpca_result$loadings)
+gwpca_sf$LocalPC1 <- local_scores[,1]
+gwpca_sf$LocalPC2 <- local_scores[,2]
+```
+
+# Mapping Local Principal Components
+
+Visualize the spatial variation of the first local principal component.
+
+```{r}
+# Map Local PC1
+plot_local_pc1 <- ggplot(gwpca_sf) +
+  geom_sf(aes(fill = LocalPC1)) +
+  scale_fill_viridis_c(option = "plasma") +
+  theme_minimal() +
+  labs(title = "Local PC1 from GWPCA", fill = "Local PC1")
+
+print(plot_local_pc1)
+```
+
+# Geographically Weighted Regression (GWR)
+
+Conduct GWR to model the relationship between HVI and contributing variables, allowing coefficients to vary spatially.
+
+```{r}
+library(spgwr)
+
+# Define dependent and independent variables
+dependent_var <- "HVI"
+independent_vars <- c(
+  "UTFVI", "NDBI_mean", "LST", "NDVI", "No.medical.insurance",
+  "Using.public.healthcare.facilities", "Poor.health.status",
+  "hypertensi", "X60_plus_pr"
+)
+
+# Ensure variables are present and correctly named
+missing_vars <- independent_vars[!independent_vars %in% names(gwpca_sf)]
+if (length(missing_vars) > 0) {
+  print("The following variables are missing from gwpca_sf:")
+  print(missing_vars)
+}
+
+# Remove missing variables from the list
+independent_vars <- independent_vars[independent_vars %in% names(gwpca_sf)]
+
+# Ensure variables are numeric and scaled
+for (var in independent_vars) {
+  gwpca_sf[[var]] <- as.numeric(gwpca_sf[[var]])
+  gwpca_sf[[var]] <- scale(gwpca_sf[[var]])
+}
+
+# Remove missing values
+gwpca_sf_complete <- gwpca_sf %>% 
+  drop_na(all_of(c(dependent_var, independent_vars)))
+
+# Coordinates for GWR
+coords <- st_coordinates(st_centroid(gwpca_sf_complete))
+
+# Bandwidth selection
+gwr_bw <- gwr.sel(
+  formula = as.formula(paste(dependent_var, "~", paste(independent_vars, collapse = "+"))),
+  data = st_set_geometry(gwpca_sf_complete, NULL),
+  coords = coords,
+  adapt = TRUE
+)
+
+print(paste("Optimal bandwidth for GWR:", gwr_bw))
+```
+
+# Running the GWR Model
+
+```{r}
+# Run GWR model
+gwr_model <- gwr(
+  formula = as.formula(paste(dependent_var, "~", paste(independent_vars, collapse = "+"))),
+  data = st_set_geometry(gwpca_sf_complete, NULL),
+  coords = coords,
+  adapt = gwr_bw,
+  hatmatrix = TRUE
+)
+
+# Extract results
+gwr_results <- as.data.frame(gwr_model$SDF)
+
+# Add results to spatial dataframe
+gwpca_sf_complete <- cbind(gwpca_sf_complete, gwr_results)
+```
+
+# Mapping GWR Coefficients
+
+Visualize the spatial variation of the coefficient for one of the key variables, e.g., LST.
+
+```{r}
+# Map LST coefficient
+plot_gwr_lst <- ggplot(gwpca_sf_complete) +
+  geom_sf(aes(fill = LST)) +
+  scale_fill_distiller(palette = "RdBu", direction = 1) +
+  theme_minimal() +
+  labs(title = "GWR Coefficient for LST", fill = "LST Coefficient")
+
+print(plot_gwr_lst)
+```
+
+# Conclusion
+
+This notebook provided a step-by-step analysis of heat vulnerability in Johannesburg, incorporating corrected code and explanations. We performed data preparation, exploratory data analysis, PCA, GWPCA, and GWR, and visualized the results to gain insights into the spatial dynamics of heat vulnerability.
+
+# Notes
+
+- **Data Paths:** Replace `"path/to/your/geometry.shp"` with the actual file path to your spatial data.
+- **Variable Names:** Ensure that the variable names used in the code match exactly with those in your data.
+- **Package Installation:** If any packages are not installed, you can install them using `install.packages("package_name")`.
+- **CRS Transformation:** Ensure that all spatial data are in the same Coordinate Reference System (CRS) for accurate spatial analysis.
+
+# References
+
+- **GWmodel Package:** [GWmodel Documentation](https://cran.r-project.org/web/packages/GWmodel/GWmodel.pdf)
+- **spdep Package:** [spdep Documentation](https://cran.r-project.org/web/packages/spdep/spdep.pdf)
+- **factoextra Package:** [factoextra Documentation](https://cran.r-project.org/web/packages/factoextra/factoextra.pdf)
+
+# Session Information
+
+```{r}
+sessionInfo()
+```

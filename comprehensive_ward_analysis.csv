@@ -1,0 +1,4 @@
+"x"
+"Error in data.frame(Rank = 1:10, Ward_ID = as.character(top_10_wards$WardID_),  : 
+  arguments imply differing number of rows: 10, 0
+"
