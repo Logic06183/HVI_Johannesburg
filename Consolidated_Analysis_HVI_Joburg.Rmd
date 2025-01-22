@@ -16,8 +16,14 @@ knitr::opts_chunk$set(
   warning = FALSE,
   message = FALSE,
   fig.width = 10,
-  fig.height = 6
+  fig.height = 6,
+  cache = FALSE  # Default cache setting
 )
+
+# Create cache directory if it doesn't exist
+if (!dir.exists("cache")) {
+  dir.create("cache")
+}
 ```
 
 # Introduction
@@ -48,15 +54,47 @@ library(mice)
 
 ## Read and Prepare Data
 
-```{r data-prep}
+```{r data-prep, cache=TRUE, cache.path='cache/', dependson=c('libraries')}
 # Read data
-data <- read.csv('data.csv', header = TRUE)
-geometry <- st_read("geometry.shp")
-geometry <- st_transform(geometry, crs = 32735)
+tryCatch({
+  data <- read.csv('data.csv', header = TRUE)
+  print("Successfully read data.csv")
+  print(paste("Number of rows:", nrow(data)))
+  print(paste("Number of columns:", ncol(data)))
+}, error = function(e) {
+  stop("Error reading data.csv: ", e$message)
+})
+
+tryCatch({
+  geometry <- st_read("geometry.shp")
+  print("Successfully read geometry.shp")
+  print(paste("Number of features:", nrow(geometry)))
+  print(paste("Original CRS:", st_crs(geometry)$input))
+  
+  # Transform to UTM zone 35S (Johannesburg)
+  geometry <- st_transform(geometry, crs = 32735)
+  print("Successfully transformed to UTM Zone 35S")
+}, error = function(e) {
+  stop("Error reading or transforming geometry.shp: ", e$message)
+})
 
 # Ensure consistent IDs
+print("Checking ID consistency...")
 data$WardID_ <- as.character(data$WardID_)
 geometry$WardID_ <- as.character(geometry$WardID_)
+
+# Check for missing IDs
+missing_in_data <- setdiff(geometry$WardID_, data$WardID_)
+missing_in_geom <- setdiff(data$WardID_, geometry$WardID_)
+
+if(length(missing_in_data) > 0) {
+  warning("Some IDs in geometry are missing from data: ", 
+          paste(missing_in_data, collapse = ", "))
+}
+if(length(missing_in_geom) > 0) {
+  warning("Some IDs in data are missing from geometry: ", 
+          paste(missing_in_geom, collapse = ", "))
+}
 
 # Define variables
 vars <- c(
@@ -68,11 +106,17 @@ vars <- c(
   "heart_dise", "hypertensi", "hiv_prop", "tb_prop", "covid_prop",
   "X60_plus_pr"
 )
+
+# Check if all variables exist in the data
+missing_vars <- vars[!vars %in% names(data)]
+if(length(missing_vars) > 0) {
+  stop("Missing variables in data: ", paste(missing_vars, collapse = ", "))
+}
 ```
 
 ## Handle Missing Data
 
-```{r missing-data}
+```{r missing-data, cache=TRUE, cache.path='cache/', dependson=c('data-prep')}
 # Merge datasets
 merged_data <- merge(geometry[, c("WardID_", "geometry")], data, by = "WardID_", all.x = TRUE)
 
@@ -148,6 +192,7 @@ corrplot(spearman_corr, method = "color", type = "upper",
          addCoef.col = "black", number.cex = 0.3,
          title = "Spearman Correlation Matrix")
 ```
+
 ```{r}
 # Calculate updated correlation matrix using Spearman
 # First ensure we have all required variables
@@ -246,98 +291,119 @@ ggplot(healthcare_summary, aes(y = percentage)) +
 
 # GWPCA Analysis
 
-```{r gwpca}
+```{r gwpca, cache=TRUE, cache.path='cache/', dependson=c('missing-data')}
+print("Starting GWPCA analysis...")
+
 # Convert to Spatial object
-cleaned_data_sp <- as(merged_data, "Spatial")
+tryCatch({
+  cleaned_data_sp <- as(merged_data, "Spatial")
+  print("Successfully converted data to Spatial object")
+}, error = function(e) {
+  stop("Error converting to Spatial object: ", e$message)
+})
 
 # Estimate bandwidth
-bw <- bw.gwpca(
-  data = cleaned_data_sp,
-  vars = vars,
-  k = 3,
-  robust = TRUE,
-  adaptive = TRUE
-)
+print("Estimating optimal bandwidth...")
+tryCatch({
+  bw <- bw.gwpca(
+    data = cleaned_data_sp,
+    vars = vars,
+    k = 3,
+    robust = TRUE,
+    adaptive = TRUE
+  )
+  print(paste("Optimal bandwidth estimated:", bw))
+}, error = function(e) {
+  stop("Error estimating bandwidth: ", e$message)
+})
 
 # Perform GWPCA
-gwpca_result <- gwpca(
-  data = cleaned_data_sp,
-  vars = vars,
-  k = 3,
-  robust = TRUE,
-  bw = bw,
-  adaptive = TRUE,
-  scores = TRUE
-)
+print("Performing GWPCA...")
+tryCatch({
+  gwpca_result <- gwpca(
+    data = cleaned_data_sp,
+    vars = vars,
+    k = 3,
+    robust = TRUE,
+    bw = bw,
+    adaptive = TRUE,
+    scores = TRUE
+  )
+  print("GWPCA completed successfully")
+  
+  # Print variance explained
+  print("Variance explained by components:")
+  print(gwpca_result$var)
+}, error = function(e) {
+  stop("Error in GWPCA calculation: ", e$message)
+})
 
 # Bootstrap for confidence intervals
+print("Starting bootstrap analysis...")
 n_boot <- 1000
 variance_boot <- matrix(NA, nrow = n_boot, ncol = 3)
-for(i in 1:n_boot) {
-  boot_idx <- sample(1:nrow(merged_data), replace = TRUE)
-  boot_pca <- prcomp(merged_data_no_geom[boot_idx, vars], scale. = TRUE)
-  variance_boot[i,] <- boot_pca$sdev[1:3]^2 / sum(boot_pca$sdev^2) * 100
-}
-variance_ci <- apply(variance_boot, 2, quantile, c(0.025, 0.975))
 
-# Display results
-print("Variance Explained with 95% CI:")
-print(variance_ci)
-```
-
-# HVI Calculation and Mapping
-```{r hvi-calculation}
-# HVI Calculation - Fixing score extraction
-# First extract the scores from gwpca_result directly
-n_locs <- length(gwpca_result$gwpca.scores)
-scores_matrix <- matrix(NA, nrow = n_locs, ncol = 3)
-colnames(scores_matrix) <- c("PC1", "PC2", "PC3")
-
-# Extract scores from each location's matrix
-for(i in 1:n_locs) {
-  if(!is.null(gwpca_result$gwpca.scores[[i]])) {
-    # Each element contains a matrix - take the first row for the scores
-    scores_matrix[i,] <- as.numeric(gwpca_result$gwpca.scores[[i]][1, 1:3])
+tryCatch({
+  for(i in 1:n_boot) {
+    if(i %% 100 == 0) print(paste("Bootstrap iteration:", i))
+    boot_idx <- sample(1:nrow(merged_data), replace = TRUE)
+    boot_pca <- prcomp(merged_data_no_geom[boot_idx, vars], scale. = TRUE)
+    variance_boot[i,] <- boot_pca$sdev[1:3]^2 / sum(boot_pca$sdev^2) * 100
   }
-}
+  variance_ci <- apply(variance_boot, 2, quantile, c(0.025, 0.975))
+  
+  print("Bootstrap completed. Confidence intervals:")
+  print(variance_ci)
+}, error = function(e) {
+  warning("Error in bootstrap analysis: ", e$message)
+  print("Continuing with main analysis...")
+})
 
-# Print diagnostics for scores
-print("Summary of extracted PC scores:")
-print(summary(as.data.frame(scores_matrix)))
-
-# Create SF object with scores
-gwpca_sf <- st_as_sf(gwpca_result$SDF)
-gwpca_sf$PC1 <- scores_matrix[,1]
-gwpca_sf$PC2 <- scores_matrix[,2]
-gwpca_sf$PC3 <- scores_matrix[,3]
-
-# Get variance explained from the GWPCA results
-var_exp <- gwpca_result$var[1:3]
-total_var <- sum(var_exp)
-weights <- var_exp/total_var
-
-print("Component weights:")
-print(weights)
-
-# Calculate weighted components
-gwpca_sf <- gwpca_sf %>%
-  mutate(
-    PC1_weighted = PC1 * weights[1],
-    PC2_weighted = PC2 * weights[2],
-    PC3_weighted = PC3 * weights[3]
-  )
-
-# Calculate HVI
-gwpca_sf <- gwpca_sf %>%
-  mutate(
-    HVI_raw = PC1_weighted + PC2_weighted + PC3_weighted,
-    HVI = scale(HVI_raw)[,1]  # Explicitly take first column of scale output
-  )
-
-# Check results
-print("Summary of HVI calculation:")
-print(summary(gwpca_sf %>% 
-  select(PC1_weighted, PC2_weighted, PC3_weighted, HVI_raw, HVI)))
+# HVI Calculation
+print("Calculating Heat Vulnerability Index...")
+tryCatch({
+  # Extract scores
+  n_locs <- length(gwpca_result$gwpca.scores)
+  scores_matrix <- matrix(NA, nrow = n_locs, ncol = 3)
+  colnames(scores_matrix) <- c("PC1", "PC2", "PC3")
+  
+  for(i in 1:n_locs) {
+    if(!is.null(gwpca_result$gwpca.scores[[i]])) {
+      scores_matrix[i,] <- as.numeric(gwpca_result$gwpca.scores[[i]][1, 1:3])
+    }
+  }
+  
+  # Create SF object with scores
+  gwpca_sf <- st_as_sf(gwpca_result$SDF)
+  gwpca_sf$PC1 <- scores_matrix[,1]
+  gwpca_sf$PC2 <- scores_matrix[,2]
+  gwpca_sf$PC3 <- scores_matrix[,3]
+  
+  # Calculate weights
+  var_exp <- gwpca_result$var[1:3]
+  total_var <- sum(var_exp)
+  weights <- var_exp/total_var
+  
+  print("Component weights:")
+  print(weights)
+  
+  # Calculate weighted components and HVI
+  gwpca_sf <- gwpca_sf %>%
+    mutate(
+      PC1_weighted = PC1 * weights[1],
+      PC2_weighted = PC2 * weights[2],
+      PC3_weighted = PC3 * weights[3],
+      HVI_raw = PC1_weighted + PC2_weighted + PC3_weighted,
+      HVI = scale(HVI_raw)[,1]
+    )
+  
+  print("HVI calculation completed successfully")
+  print("Summary of HVI scores:")
+  print(summary(gwpca_sf$HVI))
+  
+}, error = function(e) {
+  stop("Error in HVI calculation: ", e$message)
+})
 
 # Plot HVI
 ggplot(gwpca_sf) +
@@ -366,7 +432,7 @@ saveRDS(gwpca_sf, "gwpca_sf_with_hvi.rds")
 
 
 
-```{r spatial-analysis}
+```{r spatial-analysis, cache=TRUE, cache.path='cache/', dependson=c('gwpca')}
 # Calculate coordinates and neighbors
 coords <- st_coordinates(st_centroid(gwpca_sf))
 nb <- dnearneigh(coords, 0, 10000)
@@ -380,16 +446,23 @@ local_moran <- localmoran(gwpca_sf$HVI, weights_list)
 
 # Calculate mean HVI
 hvi_mean <- mean(gwpca_sf$HVI, na.rm = TRUE)
+hvi_lag <- lag.listw(weights_list, gwpca_sf$HVI)
 
 # Create LISA categories with proper indexing
 gwpca_sf <- gwpca_sf %>%
-  mutate(LISA_cluster = case_when(
-    HVI > hvi_mean & local_moran[, "Pr(z != E(Ii))"] < 0.05 ~ "High-High",
-    HVI < hvi_mean & local_moran[, "Pr(z != E(Ii))"] < 0.05 ~ "Low-Low",
-    HVI > hvi_mean & local_moran[, "Pr(z != E(Ii))"] < 0.05 ~ "High-Low",
-    HVI < hvi_mean & local_moran[, "Pr(z != E(Ii))"] < 0.05 ~ "Low-High",
-    TRUE ~ "Not Significant"
-  ))
+  mutate(
+    LISA_cluster = case_when(
+      HVI > hvi_mean & hvi_lag > hvi_mean & local_moran[, "Pr(z != E(Ii))"] < 0.05 ~ "High-High",
+      HVI < hvi_mean & hvi_lag < hvi_mean & local_moran[, "Pr(z != E(Ii))"] < 0.05 ~ "Low-Low",
+      HVI > hvi_mean & hvi_lag < hvi_mean & local_moran[, "Pr(z != E(Ii))"] < 0.05 ~ "High-Low",
+      HVI < hvi_mean & hvi_lag > hvi_mean & local_moran[, "Pr(z != E(Ii))"] < 0.05 ~ "Low-High",
+      TRUE ~ "Not Significant"
+    )
+  )
+
+# Print cluster summary
+print("LISA Cluster Summary:")
+print(table(gwpca_sf$LISA_cluster))
 
 # Plot LISA clusters
 ggplot(gwpca_sf) +
@@ -413,4 +486,3 @@ results_list <- list(
 )
 
 saveRDS(results_list, "hvi_spatial_results.rds")
-```
