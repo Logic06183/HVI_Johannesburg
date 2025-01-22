@@ -11,6 +11,33 @@ output:
 ---
 
 ```{r setup, include=FALSE}
+# Function to install and load required packages
+setup_packages <- function(packages) {
+  for(pkg in packages) {
+    if (!requireNamespace(pkg, quietly = TRUE)) {
+      message(paste("Installing package:", pkg))
+      install.packages(pkg, repos = "https://cran.rstudio.com/")
+    }
+    library(pkg, character.only = TRUE)
+  }
+}
+
+# List of required packages
+required_packages <- c(
+  "knitr", "rmarkdown", "GWmodel", "sp", "sf", "dplyr",
+  "ggplot2", "viridis", "corrplot", "rlang", "psych",
+  "tidyr", "spdep", "RColorBrewer", "factoextra", "mice",
+  "tmap", "tmaptools"
+)
+
+# Install and load packages
+tryCatch({
+  setup_packages(required_packages)
+}, error = function(e) {
+  stop("Error setting up required packages: ", e$message)
+})
+
+# Set knitr options
 knitr::opts_chunk$set(
   echo = TRUE,
   warning = FALSE,
@@ -43,6 +70,19 @@ tryCatch({
 
 # Set cache directory for knitr
 knitr::opts_chunk$set(cache.path = file.path(cache_dir, "/"))
+
+# Create figures directory if it doesn't exist
+figures_dir <- "figures"
+if (!dir.exists(figures_dir)) {
+  dir.create(figures_dir)
+  print(paste("Created figures directory:", figures_dir))
+}
+
+# Function to generate timestamped filename
+get_timestamped_filename <- function(base_name, ext) {
+  timestamp <- format(Sys.time(), "%Y%m%d_%H%M")
+  file.path(figures_dir, paste0(base_name, "_", timestamp, ".", ext))
+}
 ```
 
 # Introduction
@@ -67,6 +107,8 @@ library(spdep)
 library(RColorBrewer)
 library(factoextra)
 library(mice)
+library(tmap)
+library(tmaptools)
 ```
 
 # Data Preparation
@@ -149,6 +191,373 @@ for (var in vars) {
   merged_data[[var]] <- as.numeric(as.character(merged_data[[var]]))
   merged_data[[var]] <- scale(merged_data[[var]])
 }
+```
+
+# GWPCA Analysis with Data Validation
+
+```{r gwpca_analysis_fixed}
+# Load required packages
+library(GWmodel)
+library(sp)
+library(sf)
+library(ggplot2)
+library(viridis)
+
+# Data validation steps
+print("Checking input data dimensions...")
+print(paste("Number of rows in merged_data:", nrow(merged_data)))
+print(paste("Number of variables:", length(vars)))
+print("Variables to be used:")
+print(vars)
+
+# Check for missing values
+missing_values <- colSums(is.na(merged_data_no_geom[, vars]))
+print("\nMissing values per variable:")
+print(missing_values)
+
+# Remove any rows with missing values
+complete_data <- merged_data_no_geom[complete.cases(merged_data_no_geom[, vars]), vars]
+print(paste("\nRows after removing missing values:", nrow(complete_data)))
+
+# Scale the data
+data_scaled <- scale(as.matrix(complete_data))
+print("\nDimensions of scaled data:")
+print(dim(data_scaled))
+
+# Create spatial points with complete data
+coords <- st_coordinates(st_centroid(merged_data[complete.cases(merged_data_no_geom[, vars]), ]))
+print("\nDimensions of coordinates:")
+print(dim(coords))
+
+# Create spatial data frame
+sp_data <- SpatialPointsDataFrame(
+  coords = coords,
+  data = as.data.frame(data_scaled),
+  proj4string = CRS(st_crs(merged_data)$wkt)
+)
+
+print("\nValidating spatial data frame:")
+print(paste("Number of points:", nrow(sp_data)))
+print(paste("Number of variables:", ncol(sp_data@data)))
+
+# Calculate bandwidth
+bw <- nrow(sp_data) * 0.1
+print(paste("\nUsing bandwidth:", bw))
+
+# Run GWPCA with try-catch
+print("\nRunning GWPCA...")
+gwpca_result <- try({
+  gwpca(
+    data = sp_data,
+    vars = colnames(data_scaled),
+    k = 3,
+    adaptive = TRUE,
+    bw = bw,
+    robust = FALSE,
+    scores = TRUE
+  )
+})
+
+if(inherits(gwpca_result, "try-error")) {
+  stop("GWPCA failed: ", attr(gwpca_result, "condition")$message)
+}
+
+# Extract results
+print("\nExtracting GWPCA results...")
+var_explained <- gwpca_result$var
+prop_var <- var_explained / sum(var_explained)
+
+print("Proportion of variance explained:")
+print(prop_var)
+
+# Extract scores
+scores_matrix <- matrix(NA, nrow = nrow(sp_data), ncol = 3)
+colnames(scores_matrix) <- c("PC1", "PC2", "PC3")
+
+for(i in 1:nrow(sp_data)) {
+  if(!is.null(gwpca_result$scores[[i]])) {
+    scores_matrix[i,] <- gwpca_result$scores[[i]][1, 1:3]
+  }
+}
+
+# Calculate HVI
+weights <- prop_var[1:3]
+hvi_scores <- scores_matrix %*% weights
+hvi_standardized <- scale(hvi_scores)[,1]
+
+# Create spatial object with results
+gwpca_sf <- st_as_sf(sp_data)
+gwpca_sf$PC1 <- scores_matrix[,1]
+gwpca_sf$PC2 <- scores_matrix[,2]
+gwpca_sf$PC3 <- scores_matrix[,3]
+gwpca_sf$HVI <- hvi_standardized
+
+# Save results
+saveRDS(gwpca_result, "cache/gwpca_result.rds")
+saveRDS(gwpca_sf, "cache/gwpca_sf.rds")
+
+# Basic visualization
+print("\nCreating basic visualization...")
+png("figures/gwpca_scree_plot.png", width=800, height=600)
+barplot(prop_var * 100, 
+        names.arg = paste0("PC", 1:length(prop_var)),
+        main = "Proportion of Variance Explained by Components",
+        ylab = "Variance Explained (%)",
+        col = "steelblue")
+dev.off()
+
+print("\nGWPCA analysis completed successfully")
+```
+
+# Enhanced Visualizations
+
+```{r enhanced_visualizations}
+library(ggplot2)
+library(viridis)
+library(gridExtra)
+library(scales)
+
+# 1. Enhanced Scree Plot
+scree_data <- data.frame(
+  Component = factor(paste0("PC", 1:length(prop_var)), 
+                    levels = paste0("PC", 1:length(prop_var))),
+  Variance = prop_var * 100
+)
+
+p1 <- ggplot(scree_data, aes(x = Component, y = Variance)) +
+  geom_bar(stat = "identity", fill = viridis(1, begin = 0.5)) +
+  geom_text(aes(label = sprintf("%.1f%%", Variance)), 
+            vjust = -0.5, size = 4) +
+  labs(title = "Proportion of Variance Explained by Components",
+       x = "Principal Component",
+       y = "Variance Explained (%)") +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+    axis.text.x = element_text(angle = 0, size = 12),
+    axis.text.y = element_text(size = 12),
+    panel.grid.major = element_line(color = "gray90"),
+    panel.grid.minor = element_line(color = "gray95")
+  ) +
+  scale_y_continuous(limits = c(0, max(scree_data$Variance) * 1.1))
+
+ggsave("figures/gwpca_scree_plot_enhanced.png", p1, 
+       width = 10, height = 7, dpi = 300)
+
+# 2. Enhanced Loadings Plot
+loadings_data <- data.frame(
+  Variable = factor(colnames(local_loadings), 
+                   levels = colnames(local_loadings)[order(mean_loadings)]),
+  Loading = mean_loadings
+)
+
+p2 <- ggplot(loadings_data, aes(x = Variable, y = Loading)) +
+  geom_bar(stat = "identity", 
+           fill = colorRampPalette(viridis(3))(nrow(loadings_data))) +
+  geom_text(aes(label = sprintf("%.3f", Loading)), 
+            hjust = -0.2, size = 3.5) +
+  labs(title = "Average Absolute Loadings on PC1",
+       x = "Variables",
+       y = "Loading Value") +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+    axis.text.y = element_text(size = 12),
+    panel.grid.major = element_line(color = "gray90"),
+    panel.grid.minor = element_line(color = "gray95")
+  ) +
+  coord_flip() +
+  scale_y_continuous(limits = c(0, max(loadings_data$Loading) * 1.2))
+
+ggsave("figures/gwpca_loadings_plot_enhanced.png", p2, 
+       width = 12, height = 8, dpi = 300)
+
+# 3. Enhanced HVI Distribution
+hvi_data <- data.frame(HVI = hvi_standardized)
+
+p3 <- ggplot(hvi_data, aes(x = HVI)) +
+  geom_histogram(aes(y = ..density..), 
+                bins = 30, 
+                fill = viridis(1, begin = 0.2),
+                color = "white") +
+  geom_density(color = viridis(1, begin = 0.8), 
+               linewidth = 1) +
+  labs(title = "Distribution of Heat Vulnerability Index",
+       x = "Standardized HVI Score",
+       y = "Density") +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+    axis.text = element_text(size = 12),
+    panel.grid.major = element_line(color = "gray90"),
+    panel.grid.minor = element_line(color = "gray95")
+  )
+
+ggsave("figures/hvi_distribution_enhanced.png", p3, 
+       width = 10, height = 7, dpi = 300)
+
+# 4. Variable Importance Plot
+importance_data <- data.frame(
+  Variable = names(table(lead_vars)),
+  Count = as.numeric(table(lead_vars))
+)
+importance_data$Percentage <- importance_data$Count / sum(importance_data$Count) * 100
+importance_data <- importance_data[order(-importance_data$Count), ]
+
+p4 <- ggplot(importance_data, 
+             aes(x = reorder(Variable, Percentage), y = Percentage)) +
+  geom_bar(stat = "identity", 
+           fill = colorRampPalette(viridis(3))(nrow(importance_data))) +
+  geom_text(aes(label = sprintf("%.1f%%", Percentage)), 
+            hjust = -0.2, size = 3.5) +
+  labs(title = "Most Influential Variables by Location",
+       x = "Variables",
+       y = "Percentage of Locations (%)") +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+    axis.text.y = element_text(size = 12),
+    panel.grid.major = element_line(color = "gray90"),
+    panel.grid.minor = element_line(color = "gray95")
+  ) +
+  coord_flip() +
+  scale_y_continuous(limits = c(0, max(importance_data$Percentage) * 1.2))
+
+ggsave("figures/variable_importance_enhanced.png", p4, 
+       width = 12, height = 8, dpi = 300)
+
+# 5. Combined PC1 vs PC2 Plot with HVI
+pc_data <- data.frame(
+  PC1 = scores_matrix[,1],
+  PC2 = scores_matrix[,2],
+  HVI = hvi_standardized
+)
+
+p5 <- ggplot(pc_data, aes(x = PC1, y = PC2, color = HVI)) +
+  geom_point(size = 3, alpha = 0.7) +
+  scale_color_viridis() +
+  labs(title = "PC1 vs PC2 Colored by HVI Score",
+       x = paste0("PC1 (", sprintf("%.1f", prop_var[1]*100), "% variance)"),
+       y = paste0("PC2 (", sprintf("%.1f", prop_var[2]*100), "% variance)")) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+    axis.text = element_text(size = 12),
+    panel.grid.major = element_line(color = "gray90"),
+    panel.grid.minor = element_line(color = "gray95"),
+    legend.position = "right",
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+
+ggsave("figures/pc_scatter_enhanced.png", p5, 
+       width = 10, height = 8, dpi = 300)
+
+# Save all plots in a single figure
+combined_plot <- grid.arrange(p1, p2, p3, p4, p5, 
+                            ncol = 2, 
+                            top = textGrob("GWPCA Analysis Summary", 
+                                         gp = gpar(fontsize = 20, fontface = "bold")))
+
+ggsave("figures/gwpca_summary_dashboard.png", combined_plot, 
+       width = 20, height = 24, dpi = 300)
+```
+
+# Spatial Visualization of HVI
+```{r spatial_hvi}
+library(tmap)
+library(tmaptools)
+
+# Prepare spatial data
+gwpca_sf$HVI_cat <- cut(gwpca_sf$HVI, 
+                        breaks = c(-Inf, -1.5, -0.5, 0.5, 1.5, Inf),
+                        labels = c("Very Low", "Low", "Moderate", "High", "Very High"))
+
+# Create static map
+tm_shape(gwpca_sf) +
+  tm_fill("HVI_cat", 
+          title = "Heat Vulnerability Index",
+          palette = viridis(5),
+          style = "cat") +
+  tm_borders(col = "white", lwd = 0.5, alpha = 0.5) +
+  tm_layout(
+    title = "Spatial Distribution of Heat Vulnerability Index",
+    title.position = c("center", "top"),
+    title.size = 1.5,
+    frame = FALSE,
+    legend.title.size = 1,
+    legend.text.size = 0.8,
+    legend.position = c("right", "bottom"),
+    legend.bg.color = "white",
+    legend.bg.alpha = 0.8
+  )
+
+# Save high-resolution map
+tmap_save(filename = "figures/hvi_spatial_map.png", 
+          width = 12, 
+          height = 10, 
+          dpi = 300)
+
+# Create local Moran's I map for HVI clustering
+library(spdep)
+
+# Create neighbors list
+nb <- poly2nb(gwpca_sf)
+lw <- nb2listw(nb, style = "W")
+
+# Calculate local Moran's I
+local_moran <- localmoran(gwpca_sf$HVI, lw)
+
+# Add results to spatial object
+gwpca_sf$local_moran <- local_moran[, 1]
+gwpca_sf$local_moran_p <- local_moran[, 5]
+gwpca_sf$cluster_type <- "Not Significant"
+gwpca_sf$cluster_type[gwpca_sf$HVI > 0 & gwpca_sf$local_moran > 0 & gwpca_sf$local_moran_p <= 0.05] <- "High-High"
+gwpca_sf$cluster_type[gwpca_sf$HVI < 0 & gwpca_sf$local_moran > 0 & gwpca_sf$local_moran_p <= 0.05] <- "Low-Low"
+gwpca_sf$cluster_type[gwpca_sf$HVI > 0 & gwpca_sf$local_moran < 0 & gwpca_sf$local_moran_p <= 0.05] <- "High-Low"
+gwpca_sf$cluster_type[gwpca_sf$HVI < 0 & gwpca_sf$local_moran < 0 & gwpca_sf$local_moran_p <= 0.05] <- "Low-High"
+
+# Create LISA cluster map
+cluster_colors <- c("High-High" = "#FF0000", 
+                   "Low-Low" = "#0000FF",
+                   "High-Low" = "#FF69B4",
+                   "Low-High" = "#87CEEB",
+                   "Not Significant" = "#CCCCCC")
+
+tm_shape(gwpca_sf) +
+  tm_fill("cluster_type",
+          title = "Local Moran's I Clusters",
+          palette = cluster_colors,
+          style = "cat") +
+  tm_borders(col = "white", lwd = 0.5, alpha = 0.5) +
+  tm_layout(
+    title = "Spatial Clusters of Heat Vulnerability",
+    title.position = c("center", "top"),
+    title.size = 1.5,
+    frame = FALSE,
+    legend.title.size = 1,
+    legend.text.size = 0.8,
+    legend.position = c("right", "bottom"),
+    legend.bg.color = "white",
+    legend.bg.alpha = 0.8
+  )
+
+# Save LISA cluster map
+tmap_save(filename = "figures/hvi_cluster_map.png", 
+          width = 12, 
+          height = 10, 
+          dpi = 300)
+
+# Print summary of clusters
+print("Summary of HVI Spatial Clusters:")
+print(table(gwpca_sf$cluster_type))
+
+# Calculate Global Moran's I
+global_moran <- moran.test(gwpca_sf$HVI, lw)
+print("\nGlobal Moran's I Test Results:")
+print(global_moran)
 ```
 
 # Descriptive Statistics
@@ -307,149 +716,218 @@ ggplot(healthcare_summary, aes(y = percentage)) +
   theme(plot.title = element_text(hjust = 0.5))
 ```
 
+# Basic GWPCA Analysis
 
-# GWPCA Analysis
+```{r basic_gwpca}
+# Load required packages
+library(GWmodel)
+library(sp)
+library(sf)
 
-```{r gwpca, cache=TRUE, cache.path='cache/', dependson=c('missing-data')}
-print("Starting GWPCA analysis...")
+# Prepare data
+data_matrix <- as.matrix(merged_data_no_geom[, vars])
+data_scaled <- scale(data_matrix)
 
-# Convert to Spatial object
-tryCatch({
-  cleaned_data_sp <- as(merged_data, "Spatial")
-  print("Successfully converted data to Spatial object")
-}, error = function(e) {
-  stop("Error converting to Spatial object: ", e$message)
-})
+# Create spatial points
+coords <- st_coordinates(st_centroid(merged_data))
+sp_data <- SpatialPointsDataFrame(
+  coords = coords,
+  data = as.data.frame(data_scaled),
+  proj4string = CRS(st_crs(merged_data)$wkt)
+)
 
-# Estimate bandwidth
-print("Estimating optimal bandwidth...")
-tryCatch({
-  bw <- bw.gwpca(
-    data = cleaned_data_sp,
-    vars = vars,
-    k = 3,
-    robust = TRUE,
-    adaptive = TRUE
-  )
-  print(paste("Optimal bandwidth estimated:", bw))
-}, error = function(e) {
-  stop("Error estimating bandwidth: ", e$message)
-})
+# Run basic GWPCA
+gwpca_result <- gwpca(
+  data = sp_data,
+  vars = colnames(data_scaled),
+  k = 3,
+  adaptive = TRUE,
+  bw = nrow(sp_data) * 0.1,  # Using 10% of data points as bandwidth
+  robust = FALSE
+)
 
-# Perform GWPCA
-print("Performing GWPCA...")
-tryCatch({
-  gwpca_result <- gwpca(
-    data = cleaned_data_sp,
-    vars = vars,
-    k = 3,
-    robust = TRUE,
-    bw = bw,
-    adaptive = TRUE,
-    scores = TRUE
-  )
-  print("GWPCA completed successfully")
-  
-  # Print variance explained
-  print("Variance explained by components:")
-  print(gwpca_result$var)
-}, error = function(e) {
-  stop("Error in GWPCA calculation: ", e$message)
-})
+# Print basic results
+print("GWPCA Results:")
+print(paste("Number of components:", length(gwpca_result$var)))
+print("Variance explained:")
+print(gwpca_result$var)
 
-# Bootstrap for confidence intervals
-print("Starting bootstrap analysis...")
-n_boot <- 1000
-variance_boot <- matrix(NA, nrow = n_boot, ncol = 3)
+# Save results
+saveRDS(gwpca_result, "cache/gwpca_basic_result.rds")
 
-tryCatch({
-  for(i in 1:n_boot) {
-    if(i %% 100 == 0) print(paste("Bootstrap iteration:", i))
-    boot_idx <- sample(1:nrow(merged_data), replace = TRUE)
-    boot_pca <- prcomp(merged_data_no_geom[boot_idx, vars], scale. = TRUE)
-    variance_boot[i,] <- boot_pca$sdev[1:3]^2 / sum(boot_pca$sdev^2) * 100
-  }
-  variance_ci <- apply(variance_boot, 2, quantile, c(0.025, 0.975))
-  
-  print("Bootstrap completed. Confidence intervals:")
-  print(variance_ci)
-}, error = function(e) {
-  warning("Error in bootstrap analysis: ", e$message)
-  print("Continuing with main analysis...")
-})
+# Create simple plot
+png("figures/basic_gwpca_plot.png", width=800, height=600)
+barplot(gwpca_result$var, 
+        names.arg = paste0("PC", 1:length(gwpca_result$var)),
+        main = "Variance Explained by Components",
+        ylab = "Variance")
+dev.off()
+```
 
-# HVI Calculation
-print("Calculating Heat Vulnerability Index...")
-tryCatch({
-  # Extract scores
-  n_locs <- length(gwpca_result$gwpca.scores)
-  scores_matrix <- matrix(NA, nrow = n_locs, ncol = 3)
-  colnames(scores_matrix) <- c("PC1", "PC2", "PC3")
-  
-  for(i in 1:n_locs) {
-    if(!is.null(gwpca_result$gwpca.scores[[i]])) {
-      scores_matrix[i,] <- as.numeric(gwpca_result$gwpca.scores[[i]][1, 1:3])
-    }
-  }
-  
-  # Create SF object with scores
-  gwpca_sf <- st_as_sf(gwpca_result$SDF)
-  gwpca_sf$PC1 <- scores_matrix[,1]
-  gwpca_sf$PC2 <- scores_matrix[,2]
-  gwpca_sf$PC3 <- scores_matrix[,3]
-  
-  # Calculate weights
-  var_exp <- gwpca_result$var[1:3]
-  total_var <- sum(var_exp)
-  weights <- var_exp/total_var
-  
-  print("Component weights:")
-  print(weights)
-  
-  # Calculate weighted components and HVI
-  gwpca_sf <- gwpca_sf %>%
-    mutate(
-      PC1_weighted = PC1 * weights[1],
-      PC2_weighted = PC2 * weights[2],
-      PC3_weighted = PC3 * weights[3],
-      HVI_raw = PC1_weighted + PC2_weighted + PC3_weighted,
-      HVI = scale(HVI_raw)[,1]
-    )
-  
-  print("HVI calculation completed successfully")
-  print("Summary of HVI scores:")
-  print(summary(gwpca_sf$HVI))
-  
-}, error = function(e) {
-  stop("Error in HVI calculation: ", e$message)
-})
+```{r visualizations, fig.width=12, fig.height=8}
+# Create figures directory
+if (!dir.exists("figures")) {
+  dir.create("figures")
+}
 
-# Plot HVI
-ggplot(gwpca_sf) +
+# Function for timestamped filenames
+get_timestamp_filename <- function(base_name, ext) {
+  timestamp <- format(Sys.time(), "%Y%m%d_%H%M")
+  file.path("figures", paste0(base_name, "_", timestamp, ".", ext))
+}
+
+# 1. Correlation Matrix
+cor_matrix <- cor(merged_data_no_geom[, vars], use = "complete.obs")
+cor_plot <- corrplot(cor_matrix, 
+                    method = "color",
+                    type = "upper",
+                    order = "hclust",
+                    addCoef.col = "black",
+                    number.cex = 0.7,
+                    tl.col = "black",
+                    tl.srt = 45,
+                    title = "Correlation Matrix of Variables")
+
+# Save correlation plot
+cor_file <- get_timestamp_filename("correlation_matrix", "png")
+png(cor_file, width = 2400, height = 2400, res = 300)
+corrplot(cor_matrix, 
+         method = "color",
+         type = "upper",
+         order = "hclust",
+         addCoef.col = "black",
+         number.cex = 0.7,
+         tl.col = "black",
+         tl.srt = 45,
+         title = "Correlation Matrix of Variables")
+dev.off()
+print(paste("Saved correlation matrix as:", cor_file))
+
+# 2. GWPCA Loadings Plot
+loadings_data <- as.data.frame(gwpca_result$loadings)
+loadings_data$Variable <- rownames(loadings_data)
+
+loadings_plot <- ggplot(loadings_data, aes(x = reorder(Variable, PC1), y = PC1)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "GWPCA Component 1 Loadings",
+       x = "Variables",
+       y = "Loading Value") +
+  theme(axis.text.y = element_text(size = 10))
+
+# Save GWPCA loadings plot
+loadings_file <- get_timestamp_filename("gwpca_loadings", "png")
+ggsave(loadings_file, loadings_plot, width = 12, height = 8, dpi = 300)
+print(paste("Saved GWPCA loadings as:", loadings_file))
+
+# 3. Variance Explained Plot
+var_exp <- data.frame(
+  Component = paste0("PC", 1:3),
+  Variance = gwpca_result$var[1:3]
+)
+
+variance_plot <- ggplot(var_exp, aes(x = Component, y = Variance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  theme_minimal() +
+  labs(title = "Variance Explained by GWPCA Components",
+       y = "Variance Explained (%)") +
+  theme(axis.text = element_text(size = 10))
+
+# Save variance plot
+variance_file <- get_timestamp_filename("variance_explained", "png")
+ggsave(variance_file, variance_plot, width = 10, height = 6, dpi = 300)
+print(paste("Saved variance plot as:", variance_file))
+
+# 4. HVI Map
+hvi_map <- ggplot(gwpca_sf) +
   geom_sf(aes(fill = HVI)) +
   scale_fill_viridis(
     option = "magma",
     name = "Heat Vulnerability\nIndex",
-    limits = c(-3, 3)  # Set symmetric limits for z-scores
+    limits = c(-3, 3),
+    breaks = seq(-3, 3, by = 1)
   ) +
   theme_minimal() +
   labs(
-    title = "Heat Vulnerability Index",
-    subtitle = "Standardized scores (z-scale)"
+    title = "Heat Vulnerability Index in Johannesburg",
+    subtitle = "Standardized scores (z-scale)",
+    caption = "Data source: Spatial analysis of heat vulnerability"
   ) +
   theme(
-    plot.title = element_text(hjust = 0.5),
-    plot.subtitle = element_text(hjust = 0.5),
-    legend.position = "right"
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5),
+    legend.position = "right",
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "grey50")
   )
 
-# Save the results
-saveRDS(gwpca_sf, "gwpca_sf_with_hvi.rds")
+# Save HVI map
+hvi_file <- get_timestamp_filename("hvi_map", "png")
+ggsave(hvi_file, hvi_map, width = 12, height = 8, dpi = 300)
+print(paste("Saved HVI map as:", hvi_file))
 
+# 5. LISA Cluster Map
+lisa_map <- ggplot(gwpca_sf) +
+  geom_sf(aes(fill = LISA_cluster)) +
+  scale_fill_manual(
+    values = c(
+      "High-High" = "#d73027",
+      "Low-Low" = "#4575b4",
+      "High-Low" = "#fc8d59",
+      "Low-High" = "#91bfdb",
+      "Not Significant" = "#f7f7f7"
+    ),
+    name = "LISA Clusters"
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Spatial Clustering of Heat Vulnerability in Johannesburg",
+    subtitle = paste0(
+      "Global Moran's I p-value: ", 
+      format.pval(moran.test(gwpca_sf$HVI, weights_list)$p.value, digits = 3)
+    ),
+    caption = "Method: Local Indicators of Spatial Association (LISA)"
+  ) +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5),
+    legend.position = "right",
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "grey50")
+  )
 
+# Save LISA map
+lisa_file <- get_timestamp_filename("lisa_clusters", "png")
+ggsave(lisa_file, lisa_map, width = 12, height = 8, dpi = 300)
+print(paste("Saved LISA map as:", lisa_file))
+
+# Create summary report
+summary_file <- get_timestamp_filename("analysis_summary", "txt")
+sink(summary_file)
+cat("Heat Vulnerability Analysis Summary\n")
+cat("=================================\n\n")
+
+cat("1. GWPCA Results\n")
+cat("--------------\n")
+cat("Variance explained by components:\n")
+print(var_exp)
+
+cat("\n2. LISA Cluster Summary\n")
+cat("--------------------\n")
+print(table(gwpca_sf$LISA_cluster))
+
+cat("\n3. HVI Summary Statistics\n")
+cat("----------------------\n")
+print(summary(gwpca_sf$HVI))
+
+cat("\n4. Global Moran's I Test\n")
+cat("---------------------\n")
+print(moran.test(gwpca_sf$HVI, weights_list))
+
+sink()
+print(paste("Saved analysis summary as:", summary_file))
 ```
-
-
 
 ```{r spatial-analysis, cache=TRUE, cache.path='cache/', dependson=c('gwpca')}
 # Calculate coordinates and neighbors
@@ -460,7 +938,7 @@ weights_list <- nb2listw(nb, style = "W")
 # Calculate Global Moran's I using numeric HVI
 global_moran <- moran.test(gwpca_sf$HVI, weights_list)
 
-# Calculate Local Moran's I
+# Calculate local Moran's I
 local_moran <- localmoran(gwpca_sf$HVI, weights_list)
 
 # Calculate mean HVI
@@ -482,19 +960,6 @@ gwpca_sf <- gwpca_sf %>%
 # Print cluster summary
 print("LISA Cluster Summary:")
 print(table(gwpca_sf$LISA_cluster))
-
-# Plot LISA clusters
-ggplot(gwpca_sf) +
-  geom_sf(aes(fill = LISA_cluster)) +
-  scale_fill_manual(values = c(
-    "High-High" = "red",
-    "Low-Low" = "blue",
-    "High-Low" = "pink",
-    "Low-High" = "lightblue",
-    "Not Significant" = "grey"
-  )) +
-  theme_minimal() +
-  labs(title = "LISA Cluster Map")
 
 # Save Results
 results_list <- list(

@@ -16,3 +16,5 @@ spdep
 RColorBrewer
 factoextra
 mice
+knitr
+rmarkdown
