@@ -20,10 +20,29 @@ knitr::opts_chunk$set(
   cache = FALSE  # Default cache setting
 )
 
-# Create cache directory if it doesn't exist
-if (!dir.exists("cache")) {
-  dir.create("cache")
-}
+# Create cache directory with error handling
+cache_dir <- "cache"
+tryCatch({
+  if (!dir.exists(cache_dir)) {
+    dir.create(cache_dir, recursive = TRUE)
+    print(paste("Created cache directory:", cache_dir))
+  } else {
+    print(paste("Cache directory already exists:", cache_dir))
+  }
+  
+  # Test write permissions
+  test_file <- file.path(cache_dir, "test.txt")
+  writeLines("test", test_file)
+  unlink(test_file)
+  print("Cache directory is writable")
+  
+}, error = function(e) {
+  warning(paste("Error with cache directory:", e$message))
+  print("Will proceed without caching")
+})
+
+# Set cache directory for knitr
+knitr::opts_chunk$set(cache.path = file.path(cache_dir, "/"))
 ```
 
 # Introduction
